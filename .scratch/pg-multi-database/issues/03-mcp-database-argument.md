@@ -1,6 +1,6 @@
 # 03 - MCP: database argument for postgres tools
 
-Status: needs-triage
+Status: done
 Blocked by: 02
 
 - `run_query`, `export_query`: optional `database` argument; for adapters other than postgres it is ignored (covered by a test).
