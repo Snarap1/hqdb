@@ -105,18 +105,16 @@ func TestCtrlCCancelsDataViewPageCountAndExport(t *testing.T) {
 	waitForText(t, tm, "page load cancelled")
 
 	tm.Send(tea.KeyPressMsg{Code: '#', Text: "#"})
-	waitForFrameContaining(t, tm.Output(), "(counting...)")
+	waitForText(t, tm, "(counting...)")
 	ctrlC(tm)
-	waitForFrameContaining(t, tm.Output(), "count cancelled")
+	waitForText(t, tm, "count cancelled")
 
 	tm.Send(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	typeText(tm, filepath.Join(t.TempDir(), "out.csv"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitForFrameContaining(t, tm.Output(), "exporting...")
+	waitForText(t, tm, "exporting...")
 	ctrlC(tm)
-	// Only the changed cells redraw, and "exporting..." shares a prefix
-	// with "export cancelled".
-	waitForFrameContaining(t, tm.Output(), "cancelled")
+	waitForText(t, tm, "export cancelled")
 
 	// The tab stays usable: a plain WHERE loads and counts again.
 	tm.Send(tea.KeyPressMsg{Code: 'f', Text: "f"})
@@ -125,12 +123,10 @@ func TestCtrlCCancelsDataViewPageCountAndExport(t *testing.T) {
 	}
 	typeText(tm, "id = 1")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	// Bubble Tea redraws only changed cells, and both the reloaded "1-1"
-	// indicator and the WHERE line share prefixes with what is already on
-	// screen, so neither shows up contiguously in every run. The count
-	// under the new WHERE ("of 1", never drawn before since every earlier
-	// count was cancelled) proves the tab works again; keys are processed
-	// in order, so "#" counts under "id = 1".
+	// The count under the new WHERE ("of 1", never drawn before since
+	// every earlier count was cancelled) proves the tab works again; keys
+	// are processed in order, so "#" counts under "id = 1". Only changed
+	// cells redraw, so the whole screen is read rather than the stream.
 	tm.Send(tea.KeyPressMsg{Code: '#', Text: "#"})
-	waitForFrameContaining(t, tm.Output(), "of 1")
+	waitForText(t, tm, "of 1")
 }

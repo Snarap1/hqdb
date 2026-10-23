@@ -632,12 +632,16 @@ func TestEnterOnSQLTableOpensDataViewWithFirstPage(t *testing.T) {
 	selectNode(t, tm, "widgets")
 	enter(tm) // widgets -> still expands to Columns in the tree AND opens a Data view tab
 
-	frame := waitForFrameContaining(t, tm.Output(), "DATA pg-dev hqdb.public.widgets")
-	for _, want := range []string{"id", "name", "price", "1-3"} {
-		if !bytes.Contains(frame, []byte(want)) {
-			t.Errorf("frame missing %q:\n%s", want, frame)
+	// The tab title draws before the first page arrives, so wait for the
+	// whole screen to show both.
+	waitForScreen(t, tm, func(s string) bool {
+		for _, want := range []string{"DATA pg-dev hqdb.public.widgets", "id", "name", "price", "1-3"} {
+			if !strings.Contains(s, want) {
+				return false
+			}
 		}
-	}
+		return true
+	})
 }
 
 func TestDataViewPagingPageSizeAndValueRendering(t *testing.T) {
@@ -846,10 +850,10 @@ func TestTabsAcrossProfilesSwitchCloseAndClickFocus(t *testing.T) {
 	waitForFrameContaining(t, tm.Output(), "widgets_extra")
 	selectNode(t, tm, "widgets_extra")
 	enter(tm)
-	screen := waitForText(t, tm, "DATA pg-dev hqdb.analytics.widgets_extra")
-	if !strings.Contains(screen, "label") {
-		t.Errorf("Data view for widgets_extra missing its own column:\n%s", screen)
-	}
+	// The tab title draws before the first page arrives, so wait for both.
+	waitForScreen(t, tm, func(s string) bool {
+		return strings.Contains(s, "DATA pg-dev hqdb.analytics.widgets_extra") && strings.Contains(s, "label")
+	})
 
 	// Click tab 0's bar region (the leftmost cell of the main pane, which
 	// is always inside the first tab regardless of its title's length):
