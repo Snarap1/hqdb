@@ -67,21 +67,26 @@ func TestPostgresMultiDatabaseSchemaE2E(t *testing.T) {
 		t.Error("unknown database was not refused")
 	}
 
-	// A Profile with dbname is narrowed to it.
+	// dbname is where discovery starts, not a narrowing: the Profile still
+	// lists and opens every database.
 	p["dbname"] = "hqdb"
-	narrow, err := adapters.Open(p)
+	fromDB, err := adapters.Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer narrow.Close()
-	out, err = GetSchema(ctx, narrow, nil, "", false, DefaultLimits)
+	defer fromDB.Close()
+	out, err = GetSchema(ctx, fromDB, nil, "", false, DefaultLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := names(out.Nodes); !reflect.DeepEqual(got, []string{"hqdb"}) {
-		t.Errorf("narrowed databases = %v", got)
+	if !reflect.DeepEqual(names(out.Nodes), got) {
+		t.Errorf("databases from dbname = %v, want %v", names(out.Nodes), got)
 	}
-	if _, err := GetSchema(ctx, narrow, []string{"hqdb_two"}, "", false, DefaultLimits); err == nil {
-		t.Error("narrowed profile opened another database")
+	out, err = GetSchema(ctx, fromDB, []string{"hqdb_two", "public"}, "", false, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(out.Nodes); !reflect.DeepEqual(got, []string{"gadgets"}) {
+		t.Errorf("hqdb_two.public tables from dbname = %v", got)
 	}
 }

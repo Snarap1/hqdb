@@ -64,3 +64,8 @@ This changes the behavior of existing postgres Profiles without `dbname`, so it 
 - `issues/03-mcp-database-argument.md`
 - `issues/04-tui-catalog-databases.md`
 - `issues/05-docs.md`
+
+## Revision
+
+`dbname` no longer narrows: it is the database discovery starts from, and every postgres Profile discovers (ADR-0004, Revision).
+A login that `pg_hba.conf` rejects on both its default database and `postgres` sets `dbname` to one it can open.

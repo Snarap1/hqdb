@@ -127,15 +127,16 @@ A typo such as `hostname` fails with
 
 An empty postgres host becomes `localhost` rather than a unix socket.
 
-`postgres` takes `dbname` as an optional narrowing (ADR-0004).
-Omit it and the profile discovers its databases: hqdb connects to the login's default database (and retries against `postgres` only when that database does not exist the login lacks `CONNECT` on it, or `pg_hba.conf` has no entry for it; other failures, such as bad credentials, are reported as is), then lists every database that allows connections, is not a template, and that the login holds `CONNECT` on.
+A `postgres` profile always discovers its databases (ADR-0004): hqdb connects to one database, then lists every database that allows connections, is not a template, and that the login holds `CONNECT` on.
+`dbname` is the database it connects to first, not a narrowing; set it to a database the login can open.
+Without `dbname` hqdb connects to the login's default database, and retries against `postgres` only when that database does not exist, the login lacks `CONNECT` on it, or `pg_hba.conf` has no entry for it; other failures, such as bad credentials, are reported as is.
+When `pg_hba.conf` admits the login to some databases only, so that both its default database and `postgres` are rejected, setting `dbname` is required.
 The terminal UI shows those databases as the top level under the profile, and `get_schema` with an empty `path` lists them.
-Set `dbname` and the profile exposes that one database only, as a deliberate narrowing.
-A SQL Console opened on a database node is bound to that database; one opened on the profile node is bound to the login's default database (or `postgres` when that is unusable), and its tab names the database once the first statement has opened the session.
+A SQL Console opened on a database node is bound to that database; one opened on the profile node is bound to `dbname`, else the login's default database (or `postgres` when that is unusable), and its tab names the database once the first statement has opened the session.
 Every statement still runs inside exactly one database; PostgreSQL has no cross-database query, so one profile reaches many databases but one statement never spans two.
-The access mode is per profile and applies to every discovered database; a database that needs a different mode gets its own profile with `dbname`.
+The access mode is per profile and applies to every discovered database; a database that needs a different mode needs a separate login whose privileges cover only that database.
 Behind PgBouncer, discovery may list databases the pooler does not route; opening one fails with the driver error.
-A profile without `dbname` sees more than its default database, so the real boundary is the database account's privileges; revoke `CONNECT` on databases the account should not open.
+A profile sees every database its login can open, so the real boundary is the database account's privileges; revoke `CONNECT` on databases the account should not open.
 The mysql `tls` value is passed to the driver as its `tls` parameter, so use the driver's registered names (`true`, `skip-verify`, `preferred`).
 `secure = true` (clickhouse, redis, mongodb) turns on TLS with a minimum of TLS 1.2.
 `separator` is what `get_schema` splits redis key names on; match the instance's key convention.
@@ -342,7 +343,7 @@ Then confirm in this order:
 1. `list_profiles` with no arguments; expect every profile with its adapter, its access mode, and the default flagged. An empty list means the config was not found at all.
 2. `run_query` with `sql` set to `SELECT 1` on the default profile; expect one row. A connection error is a config issue; `hqdb check` shows the same error faster.
 3. For redis, `run_redis` with `command` set to `PING`.
-4. For mongodb, or a postgres profile without `dbname`, `get_schema` with an empty `path`; expect the databases. An empty list with no error usually means the user has no rights on any non-system database.
+4. For mongodb or postgres, `get_schema` with an empty `path`; expect the databases. An empty list with no error usually means the user has no rights on any non-system database.
 
 ## 7. When a config is right but queries fail
 
@@ -360,9 +361,9 @@ Comments, string literals, quoted identifiers, and dollar-quoted bodies are stri
 Because the keywords are whole words, a data-modifying CTE (`WITH x AS (UPDATE ...)`) and `SELECT ... FOR UPDATE` are refused, and so is a column or table whose name is a whole-word keyword such as `comment` or `update`; `updated_at` is fine.
 None of these is a bug to work around in the server.
 
-On a postgres profile without `dbname`, `run_query` and `export_query` take an optional `database` argument naming one of the databases `get_schema` lists; omitted means the connection's default database, and non-postgres adapters ignore it.
+On a postgres profile, `run_query` and `export_query` take an optional `database` argument naming one of the databases `get_schema` lists; omitted means the profile's `dbname`, else the login's default database, and non-postgres adapters ignore it.
 `get_columns`, `get_ddl`, and `get_schema` take the database as the first `path` element.
-A database the profile does not expose (not discovered, or different from its `dbname`) is refused with `database "<name>" is not available for this profile; available: <list>`.
+A database the profile does not expose (not discovered) is refused with `database "<name>" is not available for this profile; available: <list>`.
 
 The SQL is sent to the database unmodified; no `LIMIT` is injected, so bound the response with the `limit` argument.
 `run_query` defaults to 50 rows, `export_query` to unlimited when `limit` is 0.

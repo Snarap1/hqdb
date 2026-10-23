@@ -79,3 +79,20 @@ host = "127.0.0.1"
 port = 55432
 user = "hq"
 password = "hq"
+
+# hq_narrow: pg_hba.conf admits it to hqdb and hqdb_two only, so discovery
+# without dbname fails and from dbname lists both.
+[profiles.pg-narrow]
+adapter = "postgres"
+host = "127.0.0.1"
+port = 55432
+user = "hq_narrow"
+password = "hq"
+
+[profiles.pg-narrow-dbname]
+adapter = "postgres"
+host = "127.0.0.1"
+port = 55432
+user = "hq_narrow"
+password = "hq"
+dbname = "hqdb"

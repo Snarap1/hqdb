@@ -97,6 +97,18 @@ SQL
 CREATE TABLE public.gadgets(id serial primary key, name text);
 INSERT INTO public.gadgets(name) VALUES ('sprocket');
 SQL
+  # hq_narrow may only reach hqdb and hqdb_two: pg_hba.conf rejects its
+  # default database and postgres, as on servers that list databases per
+  # role (ADR-0004). The rules go first so they win over the
+  # image's catch-all line.
+  docker exec -i "$PG_NAME" psql -U hq -d postgres -v ON_ERROR_STOP=1 -q -c "CREATE ROLE hq_narrow LOGIN PASSWORD 'hq'"
+  for db in hqdb hqdb_two; do
+    docker exec -i "$PG_NAME" psql -U hq -d "$db" -v ON_ERROR_STOP=1 -q -c 'GRANT SELECT ON ALL TABLES IN SCHEMA public TO hq_narrow'
+  done
+  docker exec -u postgres "$PG_NAME" sh -c 'f="$PGDATA/pg_hba.conf" && printf "%s\n" \
+    "host hqdb,hqdb_two hq_narrow all scram-sha-256" \
+    "host all hq_narrow all reject" | cat - "$f" > "$f.new" && mv "$f.new" "$f"'
+  docker exec -i "$PG_NAME" psql -U hq -d postgres -v ON_ERROR_STOP=1 -q -c 'SELECT pg_reload_conf()' >/dev/null
   docker exec "$MY_NAME" mysql -uroot -prootpw -e "
     CREATE DATABASE hqdb2;
     CREATE TABLE hqdb.widgets(id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64), price DECIMAL(10,2));

@@ -272,8 +272,9 @@ func TestE2EGetSchemaPostgres(t *testing.T) {
 	s := startE2E(t)
 	var root catalog.SchemaOut
 	s.ok("get_schema", map[string]any{"profile": "pg-dev", "path": []string{}}, &root)
-	if len(root.Nodes) != 1 || root.Nodes[0].Name != "hqdb" || root.Nodes[0].Kind != "database" {
-		t.Fatalf("root nodes = %+v, want the hqdb database", root.Nodes)
+	// pg-dev's dbname is where discovery starts; it still lists the others.
+	if names := nodeNames(root.Nodes); !names["hqdb"] || !names["hqdb_two"] || root.Nodes[0].Kind != "database" {
+		t.Fatalf("root nodes = %+v, want the hqdb and hqdb_two databases", root.Nodes)
 	}
 	var schemas catalog.SchemaOut
 	s.ok("get_schema", map[string]any{"profile": "pg-dev", "path": []string{"hqdb"}}, &schemas)

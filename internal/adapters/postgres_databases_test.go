@@ -49,7 +49,6 @@ func TestCheckDatabase(t *testing.T) {
 	}{
 		{"listed", "beta", avail, ""},
 		{"unlisted", "gamma", avail, `database "gamma" is not available for this profile; available: alpha, beta`},
-		{"narrowed profile", "other", []string{"cfg"}, `database "other" is not available for this profile; available: cfg`},
 		{"case sensitive", "Alpha", avail, `database "Alpha" is not available for this profile; available: alpha, beta`},
 	}
 	for _, tc := range tests {
@@ -85,12 +84,7 @@ func TestDatabasesRefusesAdaptersWithoutDiscovery(t *testing.T) {
 			}
 		})
 	}
-	// A narrowed postgres Profile needs no connection to answer.
-	got, err := (&SQL{kind: "postgres", profile: map[string]any{"adapter": "postgres", "dbname": "x"}}).Databases(context.Background())
-	if err != nil || !reflect.DeepEqual(got, []string{"x"}) {
-		t.Errorf("narrowed: got %v, %v", got, err)
-	}
-	_, err = (&SQL{kind: "mysql"}).Databases(context.Background())
+	_, err := (&SQL{kind: "mysql"}).Databases(context.Background())
 	if err == nil || err.Error() != "database discovery is not available for mysql" {
 		t.Errorf("non-postgres connection: got %v", err)
 	}
@@ -199,10 +193,11 @@ func TestDatabasesE2E(t *testing.T) {
 			t.Errorf("template database %q listed", g)
 		}
 	}
-	p["dbname"] = "hqdb"
-	got, err = Databases(ctx, p)
-	if err != nil || !reflect.DeepEqual(got, []string{"hqdb"}) {
-		t.Errorf("narrowed: got %v, %v", got, err)
+	// dbname is only where discovery starts; it still lists every database.
+	p["dbname"] = "hqdb_two"
+	fromDB, err := Databases(ctx, p)
+	if err != nil || !reflect.DeepEqual(fromDB, got) {
+		t.Errorf("from dbname: got %v, %v, want %v", fromDB, err, got)
 	}
 }
 
@@ -227,4 +222,29 @@ func TestOpenDatabaseE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn2.Close()
+}
+
+func TestOnLoginDefault(t *testing.T) {
+	bare := map[string]any{"adapter": "postgres", "host": "h"}
+	withDB := map[string]any{"adapter": "postgres", "host": "h", "dbname": "cfg"}
+	urlWithDB := map[string]any{"adapter": "postgres", "conn_str": "postgres://u:p@h/cfg"}
+	tests := []struct {
+		name string
+		conn *SQL
+		want bool
+	}{
+		{"no dbname, no database", &SQL{kind: "postgres", profile: bare}, true},
+		{"dbname", &SQL{kind: "postgres", profile: withDB}, false},
+		{"dbname in a URL conn_str", &SQL{kind: "postgres", profile: urlWithDB}, false},
+		{"opened for a database", &SQL{kind: "postgres", profile: bare, database: "sales"}, false},
+		{"no profile", &SQL{kind: "postgres"}, false},
+		{"not postgres", &SQL{kind: "mssql", profile: map[string]any{"adapter": "mssql"}}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.conn.OnLoginDefault(); got != tc.want {
+				t.Errorf("OnLoginDefault() = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

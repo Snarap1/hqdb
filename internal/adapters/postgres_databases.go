@@ -55,8 +55,9 @@ func connectPostgres(p map[string]any, database string) (*SQL, error) {
 	return &SQL{kind: "postgres", db: db, profile: p, database: database}, nil
 }
 
-// configuredDatabase is the dbname a postgres Profile is narrowed to, or ""
-// when it has none (including a URL conn_str without a database).
+// configuredDatabase is the dbname a postgres Profile connects to before it
+// discovers the rest, or "" when it has none (including a URL conn_str
+// without a database).
 func configuredDatabase(p map[string]any) (string, error) {
 	p, err := config.FillFromURL(p, "postgres")
 	if err != nil {
@@ -70,9 +71,8 @@ func errNoDiscovery(adapter string) error {
 	return fmt.Errorf("database discovery is not available for %s", adapter)
 }
 
-// Databases returns the Databases a postgres Profile exposes, sorted. With
-// dbname it is only that one. Without, it lists what the login can open
-// (see SQL.Databases). Other adapters are an error.
+// Databases returns the Databases a postgres Profile exposes, sorted: every
+// one the login can open (see SQL.Databases). Other adapters are an error.
 func Databases(ctx context.Context, p map[string]any) ([]string, error) {
 	adapter, err := config.Validate(p)
 	if err != nil {
@@ -90,20 +90,22 @@ func Databases(ctx context.Context, p map[string]any) ([]string, error) {
 }
 
 // Databases is the package-level Databases on a connection that is already
-// open: the discovery query runs on it first, and only if the login's
-// default database is missing, closed to it, or rejected by pg_hba.conf does
-// discovery retry against `postgres`. Any other failure (credentials,
-// network, cancellation) is returned as is.
+// open, so it runs on the Profile's dbname when one is set. Without dbname
+// the connection is on the login's default database, and only if that is
+// unusable (see DefaultDatabaseUnusable) does discovery retry against
+// `postgres`. Any other failure (credentials, network, cancellation) is
+// returned as is.
 func (c *SQL) Databases(ctx context.Context) ([]string, error) {
 	if c.profile == nil {
 		return nil, errNoDiscovery(c.kind)
 	}
-	configured, err := configuredDatabase(c.profile)
-	if err != nil {
+	if _, err := configuredDatabase(c.profile); err != nil {
 		return nil, err
 	}
-	if configured != "" {
-		return []string{configured}, nil
+	if !c.OnLoginDefault() {
+		// dbname (or the Database this connection was opened for) names a
+		// database the login can open; no fallback.
+		return queryDatabases(ctx, c.db)
 	}
 	return discoverWithRetry(ctx, func(ctx context.Context, database string) ([]string, error) {
 		if database == "" {
@@ -116,6 +118,18 @@ func (c *SQL) Databases(ctx context.Context) ([]string, error) {
 		defer other.Close()
 		return queryDatabases(ctx, other.db)
 	})
+}
+
+// OnLoginDefault reports whether c is a postgres connection on the login's
+// default database: opened for no Database by a Profile without dbname.
+// Only such a connection falls back to `postgres` when that database is
+// unusable (see DefaultDatabaseUnusable); a named one never does.
+func (c *SQL) OnLoginDefault() bool {
+	if c.kind != "postgres" || c.profile == nil || c.database != "" {
+		return false
+	}
+	configured, err := configuredDatabase(c.profile)
+	return err == nil && configured == ""
 }
 
 // discoverWithRetry runs discover against the login's default database
@@ -177,7 +191,7 @@ func CheckDatabase(requested string, available []string) error {
 // An empty database, or an adapter whose connection is not bound to a
 // Database (anything but postgres), behaves exactly like Open: the argument
 // is ignored there. For postgres the requested Database must be the
-// configured dbname or one that discovery lists, otherwise the error names
+// Profile's dbname or one that discovery lists, otherwise the error names
 // the available ones.
 func OpenDatabase(ctx context.Context, p map[string]any, database string) (DB, error) {
 	adapter, err := config.Validate(p)

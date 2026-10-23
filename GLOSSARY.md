@@ -28,8 +28,8 @@ The top Catalog level under a Profile.
 _Avoid_: Catalog (for this level)
 
 **Discovered database**:
-A Database of a postgres Profile that has no `dbname`, found by querying the server and kept only if the login may connect to it.
-A Profile with `dbname` has no discovered databases, only the one it names.
+A Database of a postgres Profile, found by querying the server from the Profile's `dbname` (or the login's default database) and kept only if the login may connect to it.
+`dbname` is where discovery starts, not a narrowing.
 _Avoid_: Auto-detected database, database list
 
 **Schema**:

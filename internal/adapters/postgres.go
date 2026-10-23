@@ -8,7 +8,7 @@ import (
 
 // postgresDSN renders the libpq keyword/value connection string for a
 // postgres Profile. A non-empty database overrides the Profile's dbname; an
-// empty one leaves it as configured.
+// empty one connects to dbname, which is where discovery starts (ADR-0004).
 func postgresDSN(p map[string]any, database string) (string, error) {
 	p, err := config.FillFromURL(p, "postgres")
 	if err != nil {

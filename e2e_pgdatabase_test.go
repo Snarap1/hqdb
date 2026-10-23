@@ -92,3 +92,30 @@ func TestE2EPostgresUnknownDatabaseByEveryTool(t *testing.T) {
 		}
 	}
 }
+
+// TestE2EPostgresDiscoveryFromDBName covers a login pg_hba.conf admits to some
+// databases only: without dbname discovery fails on both its default
+// database and postgres; from dbname it lists every database, and an
+// unnamed database runs on dbname.
+func TestE2EPostgresDiscoveryFromDBName(t *testing.T) {
+	s := startE2E(t)
+	msg := s.errText("get_schema", map[string]any{"profile": "pg-narrow", "path": []string{}})
+	if !strings.Contains(msg, "SQLSTATE 28000") || !strings.Contains(msg, "retry against database postgres also failed") {
+		t.Errorf("pg-narrow message = %q, want the pg_hba rejection after the postgres retry", msg)
+	}
+	var root catalog.SchemaOut
+	s.ok("get_schema", map[string]any{"profile": "pg-narrow-dbname", "path": []string{}}, &root)
+	if names := nodeNames(root.Nodes); !names["hqdb"] || !names["hqdb_two"] {
+		t.Errorf("pg-narrow-dbname root nodes = %+v, want hqdb and hqdb_two", root.Nodes)
+	}
+	var cur server.RunQueryOut
+	s.ok("run_query", map[string]any{"profile": "pg-narrow-dbname", "sql": "SELECT current_database()"}, &cur)
+	if cur.RowCount != 1 || cur.Rows[0][0] != "hqdb" {
+		t.Errorf("unnamed database rows = %+v, want hqdb", cur.Rows)
+	}
+	var gadgets server.RunQueryOut
+	s.ok("run_query", map[string]any{"profile": "pg-narrow-dbname", "database": "hqdb_two", "sql": "SELECT name FROM gadgets"}, &gadgets)
+	if gadgets.RowCount != 1 || gadgets.Rows[0][0] != "sprocket" {
+		t.Errorf("hqdb_two rows = %+v, want sprocket", gadgets.Rows)
+	}
+}

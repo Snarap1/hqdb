@@ -44,8 +44,9 @@ It prints one line per profile (adapter, access, `ok` or `FAIL` with the error) 
 
 ## Postgres databases
 
-Omit `dbname` on a postgres profile to expose every database the login may connect to; set it to narrow the profile to one.
-Hold one profile per server and add `dbname` only where a database needs its own access mode.
+A postgres profile always lists every database the login may connect to; `dbname` is only the database it connects to first.
+Set `dbname` to a database the login can open when discovery fails with SQLSTATE 28000 (`pg_hba.conf` rejects the default database and `postgres`).
+Hold one profile per server and login; a database that needs its own access mode needs its own login.
 MCP clients pick a database with the `database` argument of `run_query` and `export_query`, or the first `path` element of `get_schema`, `get_columns`, and `get_ddl`.
 Each statement runs in one database; the account's privileges are the real boundary, and PgBouncer may list databases it does not route.
 Section 3 of the guide carries the details.

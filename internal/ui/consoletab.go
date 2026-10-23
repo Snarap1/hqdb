@@ -44,12 +44,12 @@ func (s *consoleSession) ensure(ctx context.Context, pool *connPool) error {
 	if s.conn != nil {
 		return nil
 	}
-	db, conn, err := s.connect(ctx, pool, s.database)
-	if err != nil && s.database == "" && adapters.DefaultDatabaseUnusable(err) {
-		// A discovering postgres Profile whose login has no usable default
-		// Database: fall back to `postgres`, as discovery does (ADR-0004).
-		// A Profile with dbname refuses it there, keeping the first error.
-		if db2, conn2, err2 := s.connect(ctx, pool, "postgres"); err2 == nil {
+	db, conn, onDefault, err := s.connect(ctx, pool, s.database)
+	if err != nil && onDefault && adapters.DefaultDatabaseUnusable(err) {
+		// A postgres Profile without dbname whose login has no usable
+		// default Database: fall back to `postgres`, as discovery does
+		// (ADR-0004). A failed fallback keeps the first error.
+		if db2, conn2, _, err2 := s.connect(ctx, pool, "postgres"); err2 == nil {
 			db, conn, err, s.database = db2, conn2, nil, "postgres"
 		}
 	}
@@ -58,9 +58,9 @@ func (s *consoleSession) ensure(ctx context.Context, pool *connPool) error {
 	}
 	s.db, s.conn = db, conn
 	if s.database == "" && db.Kind() == "postgres" {
-		// A Console on a discovering Profile's own node is bound to the
-		// login's default Database; learn which, for the tab title. A
-		// failure leaves the title unqualified.
+		// A Console on a postgres Profile's own node is bound to its dbname
+		// or the login's default Database; learn which, for the tab title.
+		// A failure leaves the title unqualified.
 		var name string
 		if conn.QueryRowContext(ctx, `SELECT current_database()`).Scan(&name) == nil {
 			s.database = name
@@ -70,23 +70,26 @@ func (s *consoleSession) ensure(ctx context.Context, pool *connPool) error {
 }
 
 // connect opens a dedicated connection to database of the session's
-// Profile and pins one *sql.Conn on it.
-func (s *consoleSession) connect(ctx context.Context, pool *connPool, database string) (adapters.DB, *sql.Conn, error) {
-	db, err := pool.OpenDedicated(poolKey{s.profile, database})
+// Profile and pins one *sql.Conn on it. onDefault reports whether the
+// connection was on the login's default database (adapters.OnLoginDefault),
+// also when pinning failed.
+func (s *consoleSession) connect(ctx context.Context, pool *connPool, database string) (db adapters.DB, conn *sql.Conn, onDefault bool, err error) {
+	db, err = pool.OpenDedicated(poolKey{s.profile, database})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	sqlDB, ok := db.(*adapters.SQL)
 	if !ok {
 		db.Close()
-		return nil, nil, adapters.ErrNotSQL(db.Kind(), "console")
+		return nil, nil, false, adapters.ErrNotSQL(db.Kind(), "console")
 	}
-	conn, err := sqlDB.SQL().Conn(ctx)
+	onDefault = sqlDB.OnLoginDefault()
+	conn, err = sqlDB.SQL().Conn(ctx)
 	if err != nil {
 		db.Close()
-		return nil, nil, err
+		return nil, nil, onDefault, err
 	}
-	return db, conn, nil
+	return db, conn, onDefault, nil
 }
 
 // boundDatabase is the Database the session is bound to, "" when unknown.

@@ -350,7 +350,7 @@ func registerTools(server *mcp.Server) {
 		Name: "get_schema",
 		Description: "List database objects one level at a time. Start with an empty path for the " +
 			"databases, then drill down: [\"hqdb\"] lists schemas (postgres, mysql, mssql) or tables " +
-			"(clickhouse) or collections (mongodb), and [\"hqdb\",\"public\"] lists tables. A postgres profile without dbname may expose several databases; the empty path lists them. On redis, keys are grouped by the " +
+			"(clickhouse) or collections (mongodb), and [\"hqdb\",\"public\"] lists tables. A postgres profile exposes every database its login can open; the empty path lists them. On redis, keys are grouped by the " +
 			"segment after the path prefix, reported as namespace or key nodes.",
 	}, getSchemaTool)
 
