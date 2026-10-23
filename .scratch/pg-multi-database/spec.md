@@ -1,6 +1,6 @@
 # Postgres: one Profile, every database on the server
 
-Status: needs-triage
+Status: done
 
 ## Problem
 
