@@ -1,6 +1,6 @@
 # 01 - ADR: postgres database discovery
 
-Status: needs-triage
+Status: done
 
 Write `docs/adr/0004-postgres-database-discovery.md` recording the decision in `../spec.md`.
 Cover: no `dbname` means discover, `dbname` means narrow; the discovery query and its `CONNECT` filter; access mode per Profile, not per database; why there is no `dbnames` list (can be added later as a filter).
