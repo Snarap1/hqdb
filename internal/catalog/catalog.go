@@ -151,7 +151,9 @@ func overCap(out *SchemaOut, limits Limits) bool {
 // sqlSchemaNodes dispatches the per-adapter catalog queries.
 func sqlSchemaNodes(ctx context.Context, conn *adapters.SQL, path []string, nameFilter string) ([]SchemaNode, error) {
 	switch conn.Kind() {
-	case "postgres", "mysql", "mssql":
+	case "postgres":
+		return postgresSchema(ctx, conn, path, nameFilter)
+	case "mysql", "mssql":
 		return relationalSchema(ctx, conn, path, nameFilter)
 	case "clickhouse":
 		return clickhouseSchema(ctx, conn, path, nameFilter)
@@ -179,7 +181,32 @@ func rebindPlaceholders(query string, kind string) string {
 	return sb.String()
 }
 
-// relationalSchema walks databases, then schemas, then tables.
+// postgresSchema lists the Profile's discovered Databases at the top level
+// (ADR-0004) and runs every deeper level on the named Database's own
+// connection, since a postgres connection is bound to one Database.
+func postgresSchema(ctx context.Context, conn *adapters.SQL, path []string, nameFilter string) ([]SchemaNode, error) {
+	if len(path) == 0 {
+		dbs, err := conn.Databases(ctx)
+		if err != nil {
+			return nil, err
+		}
+		nodes := make([]SchemaNode, len(dbs))
+		for i, d := range dbs {
+			nodes[i] = SchemaNode{Name: d, Kind: "database"}
+		}
+		return nodes, nil
+	}
+	target, release, err := conn.ForDatabase(ctx, adapters.PathDatabase(path))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return relationalSchema(ctx, target, path, nameFilter)
+}
+
+// relationalSchema walks databases, then schemas, then tables, on a
+// connection already bound to the Database the path names (postgres and
+// mssql serve one Database per connection).
 func relationalSchema(ctx context.Context, conn *adapters.SQL, path []string, nameFilter string) ([]SchemaNode, error) {
 	kind := conn.Kind()
 	tables := func(schema string) ([]SchemaNode, error) {

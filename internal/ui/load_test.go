@@ -155,7 +155,7 @@ func (fakeLoadDB) Close()       {}
 
 func TestLoadCmdReportsConnectErrorWhenOpenFails(t *testing.T) {
 	wantErr := errors.New("dial tcp: refused")
-	pool := &connPool{conns: map[string]adapters.DB{}, open: func(string) (adapters.DB, error) {
+	pool := &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
 		return nil, wantErr
 	}}
 	root := &node{kind: kindProfile, name: "dead-dev", adapter: "postgres"}
@@ -174,7 +174,7 @@ func TestLoadCmdRetriesOnceThenReportsConnectErrorWhenTheQueryKeepsFailing(t *te
 	// loadCmd must report the Profile itself as unreachable rather than
 	// leaving a healthy-looking Profile with a buried per-node error.
 	opens := 0
-	pool := &connPool{conns: map[string]adapters.DB{}, open: func(string) (adapters.DB, error) {
+	pool := &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
 		opens++
 		return fakeLoadDB{}, nil
 	}}
@@ -249,7 +249,7 @@ func TestApplyFilterSearchMsgDiscardsOnError(t *testing.T) {
 
 func TestSearchCmdReturnsErrWhenOpenFails(t *testing.T) {
 	wantErr := errors.New("dial tcp: refused")
-	pool := &connPool{conns: map[string]adapters.DB{}, open: func(string) (adapters.DB, error) {
+	pool := &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
 		return nil, wantErr
 	}}
 	root := &node{kind: kindProfile, name: "dead-dev", adapter: "postgres"}

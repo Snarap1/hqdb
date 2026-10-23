@@ -27,6 +27,11 @@ _Avoid_: Metadata, tree (for the data itself)
 The top Catalog level under a Profile.
 _Avoid_: Catalog (for this level)
 
+**Discovered database**:
+A Database of a postgres Profile that has no `dbname`, found by querying the server and kept only if the login may connect to it.
+A Profile with `dbname` has no discovered databases, only the one it names.
+_Avoid_: Auto-detected database, database list
+
 **Schema**:
 A namespace inside a Database, present only for Adapters that have one (postgres, mssql).
 _Avoid_: Namespace, owner

@@ -158,7 +158,7 @@ func TestMongoMalformedFilterShowsPositionAndKeepsPreviousResult(t *testing.T) {
 func TestMongoValidFilterAndSortReload(t *testing.T) {
 	tb := loadedMongoTab(sampleDocs()...)
 	keys := defaultKeyMap()
-	pool := &connPool{conns: map[string]adapters.DB{}, open: func(string) (adapters.DB, error) {
+	pool := &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
 		return nil, errors.New("offline")
 	}}
 	tb.Update(press("f"), keys, pool)
@@ -207,7 +207,7 @@ func TestMongoTabShowsLoadErrorAndEmptyResult(t *testing.T) {
 
 func TestMongoLoadCmdReportsConnectErrorFromPool(t *testing.T) {
 	wantErr := errors.New("dial tcp: refused")
-	pool := &connPool{conns: map[string]adapters.DB{}, open: func(string) (adapters.DB, error) {
+	pool := &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
 		return nil, wantErr
 	}}
 	tb := newMongoTab("mongo-dev", []string{"hqdb", "widgets"})
@@ -225,7 +225,7 @@ func (fakeDataViewDB) Kind() string { return "postgres" }
 func (fakeDataViewDB) Close()       {}
 
 func TestMongoLoadCmdReportsErrorForNonMongoConnection(t *testing.T) {
-	pool := &connPool{conns: map[string]adapters.DB{}, open: func(string) (adapters.DB, error) {
+	pool := &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
 		return fakeDataViewDB{}, nil
 	}}
 	tb := newMongoTab("pg-dev", []string{"hqdb", "widgets"})

@@ -36,7 +36,7 @@ func TestConsoleOpensWithUnusableStateDir(t *testing.T) {
 // unsaved draft when stepping past the newest entry.
 func TestConsoleHistoryRecallRestoresDraft(t *testing.T) {
 	keys := defaultKeyMap()
-	ct := newConsoleTab("pg", nil)
+	ct := newConsoleTab("pg", "", nil)
 	ct.hist.record("SELECT 1")
 	ct.hist.record("SELECT 2")
 	ct.editor = ct.editor.insert("draft")

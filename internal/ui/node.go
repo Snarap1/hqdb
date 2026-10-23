@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 
+	"github.com/Snarap1/hqdb/internal/adapters"
 	"github.com/Snarap1/hqdb/internal/catalog"
 )
 
@@ -248,4 +249,15 @@ func columnChildren(parent *node, cols []catalog.Column) []*node {
 		}
 	}
 	return children
+}
+
+// poolDatabase is the Database a connection for the object at path must be
+// bound to: the first path element for a postgres Profile, whose
+// connections are per Database (ADR-0004), and "" (the Profile's own
+// connection) for everything else.
+func poolDatabase(adapter string, path []string) string {
+	if adapters.BindsDatabase(adapter) {
+		return adapters.PathDatabase(path)
+	}
+	return ""
 }

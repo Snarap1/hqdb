@@ -30,8 +30,9 @@ func Serve(ctx context.Context, version string) error {
 // openProfile resolves a profile name (or the default profile), opens a
 // connection, and closes it when the returned function is called. It also
 // returns the profile's access mode, which decides whether statements are
-// screened (ADR-0003).
-func openProfile(name string) (adapters.DB, config.Access, func(), error) {
+// screened (ADR-0003). A non-empty database selects one Database of a
+// postgres Profile (ADR-0004); every other adapter ignores it.
+func openProfile(ctx context.Context, name, database string) (adapters.DB, config.Access, func(), error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, "", nil, err
@@ -44,7 +45,7 @@ func openProfile(name string) (adapters.DB, config.Access, func(), error) {
 	if err != nil {
 		return nil, "", nil, err
 	}
-	conn, err := adapters.Open(profile)
+	conn, err := adapters.OpenDatabase(ctx, profile, database)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -106,7 +107,7 @@ type getSchemaIn struct {
 }
 
 func getSchemaTool(ctx context.Context, req *mcp.CallToolRequest, in getSchemaIn) (*mcp.CallToolResult, catalog.SchemaOut, error) {
-	conn, _, closeConn, err := openProfile(in.Profile)
+	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, catalog.SchemaOut{}, err
 	}
@@ -124,7 +125,7 @@ type getColumnsIn struct {
 }
 
 func getColumnsTool(ctx context.Context, req *mcp.CallToolRequest, in getColumnsIn) (*mcp.CallToolResult, catalog.ColumnsOut, error) {
-	conn, _, closeConn, err := openProfile(in.Profile)
+	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, catalog.ColumnsOut{}, err
 	}
@@ -142,7 +143,7 @@ type getDdlIn struct {
 }
 
 func getDdlTool(ctx context.Context, req *mcp.CallToolRequest, in getDdlIn) (*mcp.CallToolResult, ddl.Out, error) {
-	conn, _, closeConn, err := openProfile(in.Profile)
+	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, ddl.Out{}, err
 	}
@@ -155,9 +156,10 @@ func getDdlTool(ctx context.Context, req *mcp.CallToolRequest, in getDdlIn) (*mc
 }
 
 type runQueryIn struct {
-	Profile string `json:"profile,omitempty" jsonschema:"profile name; omit to use default_profile"`
-	SQL     string `json:"sql" jsonschema:"one SQL statement"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"maximum rows to return; 0 means unlimited (default 50)"`
+	Profile  string `json:"profile,omitempty" jsonschema:"profile name; omit to use default_profile"`
+	Database string `json:"database,omitempty" jsonschema:"postgres only: the database to run in, as listed by get_schema with an empty path; omit for the profile's default. Ignored by other adapters"`
+	SQL      string `json:"sql" jsonschema:"one SQL statement"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"maximum rows to return; 0 means unlimited (default 50)"`
 }
 
 // RunQueryOut is the run_query response.
@@ -169,7 +171,7 @@ type RunQueryOut struct {
 }
 
 func runQueryTool(ctx context.Context, req *mcp.CallToolRequest, in runQueryIn) (*mcp.CallToolResult, RunQueryOut, error) {
-	conn, access, closeConn, err := openProfile(in.Profile)
+	conn, access, closeConn, err := openProfile(ctx, in.Profile, in.Database)
 	if err != nil {
 		return nil, RunQueryOut{}, err
 	}
@@ -210,7 +212,7 @@ type RunRedisOut struct {
 }
 
 func runRedisTool(ctx context.Context, req *mcp.CallToolRequest, in runRedisIn) (*mcp.CallToolResult, RunRedisOut, error) {
-	conn, access, closeConn, err := openProfile(in.Profile)
+	conn, access, closeConn, err := openProfile(ctx, in.Profile, "")
 	if err != nil {
 		return nil, RunRedisOut{}, err
 	}
@@ -251,7 +253,7 @@ type RunMongoOut struct {
 }
 
 func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) (*mcp.CallToolResult, RunMongoOut, error) {
-	conn, access, closeConn, err := openProfile(in.Profile)
+	conn, access, closeConn, err := openProfile(ctx, in.Profile, "")
 	if err != nil {
 		return nil, RunMongoOut{}, err
 	}
@@ -296,6 +298,7 @@ func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) 
 
 type exportQueryIn struct {
 	Profile  string `json:"profile,omitempty" jsonschema:"profile name; omit to use default_profile"`
+	Database string `json:"database,omitempty" jsonschema:"postgres only: the database to run in, as listed by get_schema with an empty path; omit for the profile's default. Ignored by other adapters"`
 	SQL      string `json:"sql" jsonschema:"one SQL statement"`
 	DestPath string `json:"dest_path" jsonschema:"destination file path; its parent directory must exist"`
 	Format   string `json:"format,omitempty" jsonschema:"csv, json, or ndjson; inferred from the file extension when omitted"`
@@ -310,7 +313,7 @@ type ExportQueryOut struct {
 }
 
 func exportQueryTool(ctx context.Context, req *mcp.CallToolRequest, in exportQueryIn) (*mcp.CallToolResult, ExportQueryOut, error) {
-	conn, access, closeConn, err := openProfile(in.Profile)
+	conn, access, closeConn, err := openProfile(ctx, in.Profile, in.Database)
 	if err != nil {
 		return nil, ExportQueryOut{}, err
 	}
@@ -347,13 +350,13 @@ func registerTools(server *mcp.Server) {
 		Name: "get_schema",
 		Description: "List database objects one level at a time. Start with an empty path for the " +
 			"databases, then drill down: [\"hqdb\"] lists schemas (postgres, mysql, mssql) or tables " +
-			"(clickhouse) or collections (mongodb), and [\"hqdb\",\"public\"] lists tables. On redis, keys are grouped by the " +
+			"(clickhouse) or collections (mongodb), and [\"hqdb\",\"public\"] lists tables. A postgres profile without dbname may expose several databases; the empty path lists them. On redis, keys are grouped by the " +
 			"segment after the path prefix, reported as namespace or key nodes.",
 	}, getSchemaTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_columns",
-		Description: "List the columns of one table: name, type, and nullability. The path's last two segments address the table, e.g. [\"hqdb\",\"public\",\"widgets\"] on postgres, [\"hqdb\",\"widgets\"] on clickhouse. On mongodb, fields are inferred from a sample of documents.",
+		Description: "List the columns of one table: name, type, and nullability. The path's last two segments address the table, e.g. [\"hqdb\",\"public\",\"widgets\"] on postgres, [\"hqdb\",\"widgets\"] on clickhouse. On postgres the first segment is the database (see get_schema with an empty path). On mongodb, fields are inferred from a sample of documents.",
 	}, getColumnsTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -362,12 +365,14 @@ func registerTools(server *mcp.Server) {
 			"server's own CREATE TABLE/VIEW text; postgres, mssql, and odbc reconstruct a table's " +
 			"columns, primary key, foreign keys, indexes, and check/unique constraints from the " +
 			"system catalogs (native is false), but return a view's stored definition verbatim " +
-			"(native is true). Not available for redis or mongodb.",
+			"(native is true). On postgres the path is [database, schema, table], the first segment being " +
+			"the database (see get_schema with an empty path). Not available for redis or mongodb.",
 	}, getDdlTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "run_query",
-		Description: "Run one SQL statement and return rows as JSON. On a read-only profile the statement is " +
+		Description: "Run one SQL statement and return rows as JSON. A postgres profile may expose several databases; " +
+			"pass database to pick one. On a read-only profile the statement is " +
 			"screened first: it must start with SELECT / WITH / EXPLAIN / SHOW / DESCRIBE / TABLE, " +
 			"must not stack statements, and must not contain write keywords " +
 			"(insert, update, delete, drop, truncate, alter, create, call, ...). The SQL is sent to the database " +
@@ -394,7 +399,7 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "export_query",
-		Description: "Run one SQL statement (screened like run_query) and stream the results into a csv, json, or " +
+		Description: "Run one SQL statement (screened like run_query; a postgres profile may expose several databases, pick one with database) and stream the results into a csv, json, or " +
 			"ndjson file. The format is inferred from the file extension when not given. The " +
 			"destination's parent directory must exist; it is not created.",
 	}, exportQueryTool)

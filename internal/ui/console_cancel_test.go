@@ -8,7 +8,7 @@ import (
 )
 
 func TestCancelledConsoleStatementThatResetTheSessionSaysSo(t *testing.T) {
-	tb := newConsoleTab("pg-dev", nil)
+	tb := newConsoleTab("pg-dev", "", nil)
 	applyConsoleMsg(consoleMsg{tab: tb, stmt: "SELECT pg_sleep(9)", cancelled: true, sessionReset: true})
 	v := ansi.Strip(tb.View(120, 30, true))
 	if !strings.Contains(v, sessionResetNotice) {
@@ -20,7 +20,7 @@ func TestCancelledConsoleStatementThatResetTheSessionSaysSo(t *testing.T) {
 }
 
 func TestCancelledConsoleStatementWithoutASessionOnlySaysCancelled(t *testing.T) {
-	tb := newConsoleTab("pg-dev", nil)
+	tb := newConsoleTab("pg-dev", "", nil)
 	applyConsoleMsg(consoleMsg{tab: tb, stmt: "SELECT 1", cancelled: true})
 	v := ansi.Strip(tb.View(120, 30, true))
 	if !strings.Contains(v, "statement cancelled") || strings.Contains(v, "session reset") {
@@ -29,7 +29,7 @@ func TestCancelledConsoleStatementWithoutASessionOnlySaysCancelled(t *testing.T)
 }
 
 func TestCancelledConsoleExportThatResetTheSessionSaysSo(t *testing.T) {
-	tb := newConsoleTab("pg-dev", nil)
+	tb := newConsoleTab("pg-dev", "", nil)
 	applyConsoleExportMsg(consoleExportMsg{tab: tb, cancelled: true, sessionReset: true})
 	if !strings.Contains(tb.exportStatus, "export cancelled") || !strings.Contains(tb.exportStatus, sessionResetNotice) {
 		t.Errorf("export status = %q, want the cancellation and the session reset", tb.exportStatus)

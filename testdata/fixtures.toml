@@ -71,3 +71,11 @@ user = "hq"
 password = "hq"
 auth_source = "admin"
 database = "hqdb"
+
+# No dbname: discovers every database on the server (ADR-0004).
+[profiles.pg-multi]
+adapter = "postgres"
+host = "127.0.0.1"
+port = 55432
+user = "hq"
+password = "hq"

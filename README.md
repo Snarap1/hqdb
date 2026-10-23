@@ -156,15 +156,18 @@ Connections are opened per tool call and closed afterwards, so it runs happily n
 | tool | what it does |
 | --- | --- |
 | `list_profiles` | Lists Profile names, adapters, access modes, and the default; never returns passwords. |
-| `get_schema` | Lists database objects one level at a time; drill down with `path`. |
+| `get_schema` | Lists database objects one level at a time; drill down with `path`. A postgres Profile without `dbname` lists its Databases first. |
 | `get_columns` | Lists the columns of one table: name, type, nullability. MongoDB fields are inferred from a sample. |
 | `get_ddl` | Returns a table's or view's definition, native where the server has one, reconstructed otherwise. |
-| `run_query` | Runs one SQL statement and returns rows as JSON. |
+| `run_query` | Runs one SQL statement and returns rows as JSON; `database` picks a postgres Database. |
 | `run_redis` | Runs one Redis command. |
 | `run_mongo` | Runs `find`, `aggregate`, `count`, or `distinct`. |
-| `export_query` | Streams a query into a `csv`, `json`, or `ndjson` file. |
+| `export_query` | Streams a query into a `csv`, `json`, or `ndjson` file; `database` picks a postgres Database. |
 
 `profile` is optional everywhere: omitting it uses `default_profile`.
+A postgres Profile without `dbname` discovers every Database the login may connect to; with `dbname` it exposes that one only.
+`get_columns` and `get_ddl` take the Database as the first `path` element, and `run_query` and `export_query` take an optional `database` argument (the connection's default when omitted).
+Each statement runs inside one Database, never across two; the database account's privileges stay the real boundary, and behind PgBouncer a listed Database may fail to open.
 No `LIMIT` is injected into SQL; the `limit` argument bounds the response (default 50).
 
 Register it with Claude Code:
@@ -199,7 +202,7 @@ Only `default_profile` and `profiles` are accepted at the top level.
 
 | adapter | keys |
 | --- | --- |
-| `postgres` | `host`, `port`, `user`, `password`, `dbname` (alias `database`), `sslmode` (default `prefer`), `conn_str` |
+| `postgres` | `host`, `port`, `user`, `password`, `dbname` (alias `database`; omit to expose every Database the login can open), `sslmode` (default `prefer`), `conn_str` |
 | `mysql` | `host`, `port` (default 3306), `user`, `password`, `dbname` (alias `database`), `tls` (default `false`), `conn_str` |
 | `mssql` | `host`, `port` (default 1433), `user`, `password`, `dbname` (alias `database`), `encrypt` (default `disable`), `conn_str` |
 | `odbc` | `conn_str` (ODBC string, or a list of strings) |

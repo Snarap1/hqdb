@@ -35,6 +35,12 @@ type DB interface {
 type SQL struct {
 	kind string
 	db   *sql.DB
+	// profile and database are set only on a postgres connection: the Profile
+	// it was opened from, and the Database it was explicitly bound to ("" for
+	// the login's default). They let it open sibling connections to the
+	// other Databases of the same server (ForDatabase, ADR-0004).
+	profile  map[string]any
+	database string
 }
 
 func (c *SQL) Kind() string { return c.kind }
@@ -137,55 +143,6 @@ func pgDSN(pairs ...string) string {
 		}
 	}
 	return strings.Join(kept, " ")
-}
-
-func openPostgres(p map[string]any) (DB, error) {
-	p, err := config.FillFromURL(p, "postgres")
-	if err != nil {
-		return nil, err
-	}
-	host, port, err := hostPort(p, "localhost", 5432)
-	if err != nil {
-		return nil, err
-	}
-	user, err := config.OptStr(p, "user")
-	if err != nil {
-		return nil, err
-	}
-	pass, err := config.OptStr(p, "password")
-	if err != nil {
-		return nil, err
-	}
-	dbname, err := config.DBOpt(p)
-	if err != nil {
-		return nil, err
-	}
-	sslmode, err := config.OptStr(p, "sslmode")
-	if err != nil {
-		return nil, err
-	}
-	if sslmode == "" {
-		sslmode = "prefer"
-	}
-	// An empty dbname is omitted rather than written as `dbname=`: the pgx
-	// keyword/value parser reads an empty value as "the next token", so a
-	// bare `dbname=` swallows the following pair and the server then fails
-	// with `database "sslmode=prefer" does not exist`. Omitting it leaves
-	// Config.Database empty, so the startup message carries no database and
-	// the server falls back to the login's default database.
-	dsn := pgDSN(
-		pgKV("host", host),
-		pgKV("port", strconv.Itoa(port)),
-		pgKV("user", user),
-		pgKV("password", pass),
-		pgKV("dbname", dbname),
-		pgKV("sslmode", sslmode),
-	)
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, err
-	}
-	return &SQL{kind: "postgres", db: db}, nil
 }
 
 func openMySQL(p map[string]any) (DB, error) {

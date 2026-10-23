@@ -85,23 +85,24 @@ type ddlMsg struct {
 // openMongoDataViewCmd's shape. A fetch on the cached connection that
 // fails is retried once after Reopen, the same recovery loadCmd gives the
 // Catalog tree.
-func openDDLCmd(pool *connPool, profile string, path []string) (*ddlTab, tea.Cmd) {
+func openDDLCmd(pool *connPool, profile, adapter string, path []string) (*ddlTab, tea.Cmd) {
 	t := &ddlTab{
 		title:   dataViewTitle(profile, path) + " (DDL)",
 		profile: profile,
 		path:    append([]string{}, path...),
 		loading: true,
 	}
+	database := poolDatabase(adapter, path)
 	ctx, done := t.work.start()
 	cmd := func() tea.Msg {
 		defer done()
-		conn, err := pool.Open(profile)
+		conn, err := pool.Open(poolKey{profile, database})
 		var out *ddl.Out
 		if err == nil {
 			out, err = ddl.GetDDL(ctx, conn, path)
 		}
 		if err != nil && ctx.Err() == nil {
-			if conn2, rerr := pool.Reopen(profile); rerr == nil {
+			if conn2, rerr := pool.Reopen(poolKey{profile, database}); rerr == nil {
 				out, err = ddl.GetDDL(ctx, conn2, path)
 			}
 		}
