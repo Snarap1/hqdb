@@ -1,5 +1,6 @@
 # hqdb - headquarters for your databases
 
+[![CI](https://github.com/Snarap1/hqdb/actions/workflows/ci.yml/badge.svg)](https://github.com/Snarap1/hqdb/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Snarap1/hqdb)](https://github.com/Snarap1/hqdb/releases/latest)
 
 <p align="center">

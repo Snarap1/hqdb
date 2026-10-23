@@ -28,9 +28,9 @@ jobs:
           - { goos: windows, goarch: arm64 }
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
@@ -68,7 +68,7 @@ jobs:
           # Leave only the archive, so upload-artifact does not also ship the raw binaries.
           rm -f "dist/hqdb$ext"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hqdb-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
@@ -80,11 +80,11 @@ jobs:
     steps:
       # gh release create --generate-notes reads the commit log, so this job
       # needs a repository, not just the downloaded artifacts.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
