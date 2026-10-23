@@ -35,14 +35,13 @@ type DB interface {
 type SQL struct {
 	kind string
 	db   *sql.DB
-	// profile is the Profile this connection was opened from, kept so a
-	// caller can open sibling connections to other Databases of the same
-	// server (OpenDatabase) without being handed the Profile again.
-	profile map[string]any
+	// profile and database are set only on a postgres connection: the Profile
+	// it was opened from, and the Database it was explicitly bound to ("" for
+	// the login's default). They let it open sibling connections to the
+	// other Databases of the same server (ForDatabase, ADR-0004).
+	profile  map[string]any
+	database string
 }
-
-// Profile is the Profile this connection was opened from.
-func (c *SQL) Profile() map[string]any { return c.profile }
 
 func (c *SQL) Kind() string { return c.kind }
 func (c *SQL) Close()       { _ = c.db.Close() }
@@ -147,7 +146,6 @@ func pgDSN(pairs ...string) string {
 }
 
 func openMySQL(p map[string]any) (DB, error) {
-	origin := p
 	p, err := config.FillFromURL(p, "mysql")
 	if err != nil {
 		return nil, err
@@ -181,11 +179,10 @@ func openMySQL(p map[string]any) (DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SQL{kind: "mysql", db: db, profile: origin}, nil
+	return &SQL{kind: "mysql", db: db}, nil
 }
 
 func openMSSQL(p map[string]any, adapter string) (DB, error) {
-	origin := p
 	var host string
 	var port int
 	var user, pass, dbname, encrypt string
@@ -239,7 +236,7 @@ func openMSSQL(p map[string]any, adapter string) (DB, error) {
 	// matching the '?' convention the catalog and ddl packages use for
 	// every other adapter.
 	db := sql.OpenDB(mssql.NewConnectorWithProcessQueryText(params))
-	return &SQL{kind: adapter, db: db, profile: origin}, nil
+	return &SQL{kind: adapter, db: db}, nil
 }
 
 // odbcConn is the subset of an ODBC connection string hqdb understands.
@@ -365,7 +362,6 @@ func clickhouseProtocol(name string) (clickhouse.Protocol, error) {
 }
 
 func openClickHouse(p map[string]any) (DB, error) {
-	origin := p
 	p, err := config.FillFromURL(p, "clickhouse")
 	if err != nil {
 		return nil, err
@@ -417,7 +413,7 @@ func openClickHouse(p map[string]any) (DB, error) {
 		opts.TLS = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}
 	}
 	db := clickhouse.OpenDB(opts)
-	return &SQL{kind: "clickhouse", db: db, profile: origin}, nil
+	return &SQL{kind: "clickhouse", db: db}, nil
 }
 
 func openRedis(p map[string]any) (DB, error) {

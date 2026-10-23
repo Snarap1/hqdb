@@ -77,13 +77,13 @@ func openRedisKeyCmd(pool *connPool, profile string, path []string) (*redisKeyTa
 			}
 			return loadRedisValue(ctx, rc.Redis(), strings.Join(path, rc.Sep()))
 		}
-		conn, err := pool.Open(profile)
+		conn, err := pool.Open(poolKey{profile: profile})
 		var val *redisValue
 		if err == nil {
 			val, err = load(conn)
 		}
 		if err != nil && ctx.Err() == nil {
-			if conn2, rerr := pool.Reopen(profile); rerr == nil {
+			if conn2, rerr := pool.Reopen(poolKey{profile: profile}); rerr == nil {
 				val, err = load(conn2)
 			}
 		}

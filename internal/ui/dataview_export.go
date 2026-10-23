@@ -51,7 +51,7 @@ func (d *dataViewTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
 	profile, database, seq := d.profile, d.database(), d.exportSeq
 	return func() tea.Msg {
 		defer cancel()
-		conn, err := pool.OpenIn(profile, database)
+		conn, err := pool.Open(poolKey{profile, database})
 		if err != nil {
 			return exportViewMsg{tab: d, seq: seq, format: format, err: err}
 		}

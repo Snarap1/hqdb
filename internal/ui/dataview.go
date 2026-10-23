@@ -167,13 +167,13 @@ func runOnProfile(ctx context.Context, pool *connPool, profile, database, sqlTex
 		}
 		return query.Run(ctx, sqlConn.SQL(), sqlText, 0)
 	}
-	conn, err := pool.OpenIn(profile, database)
+	conn, err := pool.Open(poolKey{profile, database})
 	var res *query.Result
 	if err == nil {
 		res, err = run(conn)
 	}
 	if err != nil && ctx.Err() == nil {
-		conn2, rerr := pool.ReopenIn(profile, database)
+		conn2, rerr := pool.Reopen(poolKey{profile, database})
 		if rerr != nil {
 			return nil, rerr
 		}

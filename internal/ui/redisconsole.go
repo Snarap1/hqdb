@@ -52,7 +52,7 @@ func (c *redisConsoleConn) client(pool *connPool) (adapters.DB, *adapters.Redis,
 		return nil, nil, fmt.Errorf("console is closed")
 	}
 	if c.db == nil {
-		db, err := pool.OpenDedicated(c.profile)
+		db, err := pool.OpenDedicated(poolKey{profile: c.profile})
 		if err != nil {
 			return nil, nil, err
 		}

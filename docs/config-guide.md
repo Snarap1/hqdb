@@ -128,9 +128,10 @@ A typo such as `hostname` fails with
 An empty postgres host becomes `localhost` rather than a unix socket.
 
 `postgres` takes `dbname` as an optional narrowing (ADR-0004).
-Omit it and the profile discovers its databases: hqdb connects to the login's default database (and retries against `postgres` if that fails), then lists every database that allows connections, is not a template, and that the login holds `CONNECT` on.
+Omit it and the profile discovers its databases: hqdb connects to the login's default database (and retries against `postgres` only when that database does not exist or the login lacks `CONNECT` on it; other failures, such as bad credentials, are reported as is), then lists every database that allows connections, is not a template, and that the login holds `CONNECT` on.
 The terminal UI shows those databases as the top level under the profile, and `get_schema` with an empty `path` lists them.
 Set `dbname` and the profile exposes that one database only, as a deliberate narrowing.
+A SQL Console opened on a database node is bound to that database; one opened on the profile node is bound to the login's default database (or `postgres` when that is missing), and its tab names the database once the first statement has opened the session.
 Every statement still runs inside exactly one database; PostgreSQL has no cross-database query, so one profile reaches many databases but one statement never spans two.
 The access mode is per profile and applies to every discovered database; a database that needs a different mode gets its own profile with `dbname`.
 Behind PgBouncer, discovery may list databases the pooler does not route; opening one fails with the driver error.

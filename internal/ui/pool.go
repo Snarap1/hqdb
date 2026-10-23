@@ -44,21 +44,15 @@ func newConnPool(cfg *config.Config) *connPool {
 	}
 }
 
-// Open returns the cached connection for profile's default database,
-// opening one if none is cached yet.
-func (p *connPool) Open(profile string) (adapters.DB, error) {
-	return p.OpenIn(profile, "")
-}
-
-// OpenIn is Open for one Database of profile.
-func (p *connPool) OpenIn(profile, database string) (adapters.DB, error) {
+// Open returns the cached connection for k, opening one if none is cached
+// yet.
+func (p *connPool) Open(k poolKey) (adapters.DB, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	k := poolKey{profile, database}
 	if c, ok := p.conns[k]; ok {
 		return c, nil
 	}
-	c, err := p.open(profile, database)
+	c, err := p.open(k.profile, k.database)
 	if err != nil {
 		return nil, err
 	}
@@ -66,31 +60,23 @@ func (p *connPool) OpenIn(profile, database string) (adapters.DB, error) {
 	return c, nil
 }
 
-// OpenDedicated opens a new connection for profile that the pool neither
-// caches nor closes; the caller owns it. A SQL Console uses it so its
-// pinned session is never shared with, or dropped by, the Catalog tree.
-func (p *connPool) OpenDedicated(profile string) (adapters.DB, error) {
-	return p.open(profile, "")
+// OpenDedicated opens a new connection for k that the pool neither caches
+// nor closes; the caller owns it. A SQL Console uses it so its pinned
+// session is never shared with, or dropped by, the Catalog tree.
+func (p *connPool) OpenDedicated(k poolKey) (adapters.DB, error) {
+	return p.open(k.profile, k.database)
 }
 
-// OpenDedicatedIn is OpenDedicated bound to one Database of profile.
-func (p *connPool) OpenDedicatedIn(profile, database string) (adapters.DB, error) {
-	return p.open(profile, database)
-}
-
-// Reopen discards and closes any cached connection for profile's default
-// database and opens a fresh one.
-func (p *connPool) Reopen(profile string) (adapters.DB, error) {
-	return p.ReopenIn(profile, "")
-}
-
-// ReopenIn is Reopen for one Database of profile; the Profile's other
-// connections are untouched.
-func (p *connPool) ReopenIn(profile, database string) (adapters.DB, error) {
+// Reopen discards and closes any cached connection for k and opens a fresh
+// one; the Profile's connections to other Databases are untouched.
+func (p *connPool) Reopen(k poolKey) (adapters.DB, error) {
 	p.mu.Lock()
-	p.dropKey(poolKey{profile, database})
+	if c, ok := p.conns[k]; ok {
+		c.Close()
+		delete(p.conns, k)
+	}
 	p.mu.Unlock()
-	return p.OpenIn(profile, database)
+	return p.Open(k)
 }
 
 // Drop closes and discards every cached connection of profile, whatever
@@ -98,25 +84,10 @@ func (p *connPool) ReopenIn(profile, database string) (adapters.DB, error) {
 func (p *connPool) Drop(profile string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for k := range p.conns {
+	for k, c := range p.conns {
 		if k.profile == profile {
-			p.dropKey(k)
+			c.Close()
+			delete(p.conns, k)
 		}
-	}
-}
-
-// DropIn closes and discards the cached connection for one (profile,
-// database) pair, if any.
-func (p *connPool) DropIn(profile, database string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.dropKey(poolKey{profile, database})
-}
-
-// dropKey is the unlocked core of Drop, DropIn and Reopen.
-func (p *connPool) dropKey(k poolKey) {
-	if c, ok := p.conns[k]; ok {
-		c.Close()
-		delete(p.conns, k)
 	}
 }

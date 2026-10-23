@@ -76,7 +76,7 @@ func loadCmd(work *cancelSet, pool *connPool, n *node, loadMore bool) tea.Cmd {
 		var schema *catalog.SchemaOut
 		var cols *catalog.ColumnsOut
 
-		conn, err := pool.OpenIn(profile, database)
+		conn, err := pool.Open(poolKey{profile, database})
 		if err == nil {
 			schema, cols, err = query(conn)
 		}
@@ -86,7 +86,7 @@ func loadCmd(work *cancelSet, pool *connPool, n *node, loadMore bool) tea.Cmd {
 			return catalogMsg{node: n, err: errCancelled}
 		}
 		if err != nil {
-			conn, rerr := pool.ReopenIn(profile, database)
+			conn, rerr := pool.Reopen(poolKey{profile, database})
 			if rerr != nil {
 				return catalogMsg{node: n, err: rerr, connectErr: true}
 			}
@@ -180,7 +180,7 @@ func searchCmd(work *cancelSet, pool *connPool, n *node, query string) tea.Cmd {
 	ctx, done := work.start()
 	return func() tea.Msg {
 		defer done()
-		conn, err := pool.OpenIn(n.profileRoot().name, poolDatabase(n.adapter, n.path))
+		conn, err := pool.Open(poolKey{n.profileRoot().name, poolDatabase(n.adapter, n.path)})
 		if err != nil {
 			return filterSearchMsg{node: n, query: query, err: err}
 		}

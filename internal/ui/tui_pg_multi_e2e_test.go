@@ -1,6 +1,7 @@
 package ui_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -42,4 +43,22 @@ func TestPostgresMultiDatabaseConsoleIsBoundToItsDatabase(t *testing.T) {
 	typeText(tm, "SELECT 'db=' || current_database() || '|' AS d;")
 	altEnter(tm)
 	waitForText(t, tm, "db=hqdb_two|")
+}
+
+// A SQL Console opened on the Profile node of a discovering Profile runs in
+// the login's default Database; once its session is open the tab names that
+// Database instead of showing none.
+func TestPostgresMultiDatabaseProfileConsoleNamesItsResolvedDatabase(t *testing.T) {
+	cfg := loadFixtureConfig(t, "")
+	tm := startTUI(t, cfg)
+	waitForFrameContaining(t, tm.Output(), "pg-multi")
+
+	selectPath(t, tm, "pg-multi")
+	tm.Send(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	waitForText(t, tm, "pg-multi console")
+	typeText(tm, "SELECT 'db=' || current_database() || '|' AS d;")
+	altEnter(tm)
+	re := regexp.MustCompile(`db=([a-z_0-9]+)\|`)
+	screen := waitForScreen(t, tm, func(s string) bool { return re.MatchString(s) })
+	waitForText(t, tm, re.FindStringSubmatch(screen)[1]+" console")
 }

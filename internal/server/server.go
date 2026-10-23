@@ -52,25 +52,6 @@ func openProfile(ctx context.Context, name, database string) (adapters.DB, confi
 	return conn, access, conn.Close, nil
 }
 
-// pathDatabase is the Database a get_columns or get_ddl path names: its
-// first segment when the path is database-qualified (database, schema,
-// table). Only postgres acts on it; the others ignore it.
-func pathDatabase(path []string) string {
-	if len(path) >= 3 {
-		return path[0]
-	}
-	return ""
-}
-
-// firstSegment is the Database a get_schema path names (path[0]), or "" for
-// the root listing.
-func firstSegment(path []string) string {
-	if len(path) > 0 {
-		return path[0]
-	}
-	return ""
-}
-
 // screen refuses a statement whose detector reported violation, unless the
 // profile is read-write, where statements run unscreened (ADR-0003).
 func screen(access config.Access, violation string) error {
@@ -126,7 +107,7 @@ type getSchemaIn struct {
 }
 
 func getSchemaTool(ctx context.Context, req *mcp.CallToolRequest, in getSchemaIn) (*mcp.CallToolResult, catalog.SchemaOut, error) {
-	conn, _, closeConn, err := openProfile(ctx, in.Profile, firstSegment(in.Path))
+	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, catalog.SchemaOut{}, err
 	}
@@ -144,7 +125,7 @@ type getColumnsIn struct {
 }
 
 func getColumnsTool(ctx context.Context, req *mcp.CallToolRequest, in getColumnsIn) (*mcp.CallToolResult, catalog.ColumnsOut, error) {
-	conn, _, closeConn, err := openProfile(ctx, in.Profile, pathDatabase(in.Path))
+	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, catalog.ColumnsOut{}, err
 	}
@@ -162,7 +143,7 @@ type getDdlIn struct {
 }
 
 func getDdlTool(ctx context.Context, req *mcp.CallToolRequest, in getDdlIn) (*mcp.CallToolResult, ddl.Out, error) {
-	conn, _, closeConn, err := openProfile(ctx, in.Profile, pathDatabase(in.Path))
+	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, ddl.Out{}, err
 	}
@@ -375,7 +356,7 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_columns",
-		Description: "List the columns of one table: name, type, and nullability. The path's last two segments address the table, e.g. [\"hqdb\",\"public\",\"widgets\"] on postgres, [\"hqdb\",\"widgets\"] on clickhouse. On mongodb, fields are inferred from a sample of documents.",
+		Description: "List the columns of one table: name, type, and nullability. The path's last two segments address the table, e.g. [\"hqdb\",\"public\",\"widgets\"] on postgres, [\"hqdb\",\"widgets\"] on clickhouse. On postgres the first segment is the database (see get_schema with an empty path). On mongodb, fields are inferred from a sample of documents.",
 	}, getColumnsTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -384,7 +365,8 @@ func registerTools(server *mcp.Server) {
 			"server's own CREATE TABLE/VIEW text; postgres, mssql, and odbc reconstruct a table's " +
 			"columns, primary key, foreign keys, indexes, and check/unique constraints from the " +
 			"system catalogs (native is false), but return a view's stored definition verbatim " +
-			"(native is true). Not available for redis or mongodb.",
+			"(native is true). On postgres the path is [database, schema, table], the first segment being " +
+			"the database (see get_schema with an empty path). Not available for redis or mongodb.",
 	}, getDdlTool)
 
 	mcp.AddTool(server, &mcp.Tool{

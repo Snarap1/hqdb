@@ -196,7 +196,7 @@ func TestRefreshResetsChildrenAndForcesProfileReconnect(t *testing.T) {
 	root.children = []*node{{kind: kindDatabase, name: "stale", parent: root}}
 	pool, calls := fakePool()
 	// Open once so there is a cached connection for refresh to drop.
-	if _, err := pool.Open(root.name); err != nil {
+	if _, err := pool.Open(poolKey{profile: root.name}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -236,7 +236,7 @@ func TestDisconnectDropsConnectionAndCollapsesProfile(t *testing.T) {
 	root.expanded = true
 	root.children = []*node{{kind: kindDatabase, name: "hqdb", parent: root}}
 	pool, _ := fakePool()
-	if _, err := pool.Open(root.name); err != nil {
+	if _, err := pool.Open(poolKey{profile: root.name}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -285,7 +285,7 @@ func TestUpdateWiresExpandRefreshDisconnectKeys(t *testing.T) {
 	}
 	tr.roots[0].loading = false
 
-	if _, err := pool.Open(tr.roots[0].name); err != nil {
+	if _, err := pool.Open(poolKey{profile: tr.roots[0].name}); err != nil {
 		t.Fatal(err)
 	}
 	tr, _ = tr.Update(shiftDKey(), keys, pool)
@@ -383,7 +383,7 @@ func TestSingleLetterKeysTypedIntoFilterDoNotTriggerActions(t *testing.T) {
 	root.expanded = true
 	root.children = []*node{{kind: kindDatabase, name: "hqdb", parent: root}}
 	pool, calls := fakePool()
-	if _, err := pool.Open(root.name); err != nil {
+	if _, err := pool.Open(poolKey{profile: root.name}); err != nil {
 		t.Fatal(err)
 	}
 	*calls = 0

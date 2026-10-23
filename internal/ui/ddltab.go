@@ -96,13 +96,13 @@ func openDDLCmd(pool *connPool, profile, adapter string, path []string) (*ddlTab
 	ctx, done := t.work.start()
 	cmd := func() tea.Msg {
 		defer done()
-		conn, err := pool.OpenIn(profile, database)
+		conn, err := pool.Open(poolKey{profile, database})
 		var out *ddl.Out
 		if err == nil {
 			out, err = ddl.GetDDL(ctx, conn, path)
 		}
 		if err != nil && ctx.Err() == nil {
-			if conn2, rerr := pool.ReopenIn(profile, database); rerr == nil {
+			if conn2, rerr := pool.Reopen(poolKey{profile, database}); rerr == nil {
 				out, err = ddl.GetDDL(ctx, conn2, path)
 			}
 		}

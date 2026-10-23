@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 
+	"github.com/Snarap1/hqdb/internal/adapters"
 	"github.com/Snarap1/hqdb/internal/catalog"
 )
 
@@ -255,8 +256,8 @@ func columnChildren(parent *node, cols []catalog.Column) []*node {
 // connections are per Database (ADR-0004), and "" (the Profile's own
 // connection) for everything else.
 func poolDatabase(adapter string, path []string) string {
-	if adapter == "postgres" && len(path) > 0 {
-		return path[0]
+	if adapters.BindsDatabase(adapter) {
+		return adapters.PathDatabase(path)
 	}
 	return ""
 }

@@ -40,11 +40,11 @@ func TestConnPoolOpenCachesConnection(t *testing.T) {
 	opener, calls := countingOpener(nil)
 	p := newTestPool(opener)
 
-	c1, err := p.Open("pg-dev")
+	c1, err := p.Open(poolKey{profile: "pg-dev"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c2, err := p.Open("pg-dev")
+	c2, err := p.Open(poolKey{profile: "pg-dev"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestConnPoolOpenPropagatesError(t *testing.T) {
 	opener, _ := countingOpener(wantErr)
 	p := newTestPool(opener)
 
-	_, err := p.Open("dead-dev")
+	_, err := p.Open(poolKey{profile: "dead-dev"})
 	if !errors.Is(err, wantErr) {
 		t.Errorf("got %v, want %v", err, wantErr)
 	}
@@ -71,8 +71,8 @@ func TestConnPoolReopenClosesOldAndOpensFresh(t *testing.T) {
 	opener, calls := countingOpener(nil)
 	p := newTestPool(opener)
 
-	first, _ := p.Open("pg-dev")
-	second, err := p.Reopen("pg-dev")
+	first, _ := p.Open(poolKey{profile: "pg-dev"})
+	second, err := p.Reopen(poolKey{profile: "pg-dev"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +91,12 @@ func TestConnPoolDropClosesAndNextOpenIsFresh(t *testing.T) {
 	opener, calls := countingOpener(nil)
 	p := newTestPool(opener)
 
-	first, _ := p.Open("pg-dev")
+	first, _ := p.Open(poolKey{profile: "pg-dev"})
 	p.Drop("pg-dev")
 	if !first.(*fakeDB).closed {
 		t.Errorf("Drop did not close the connection")
 	}
-	second, _ := p.Open("pg-dev")
+	second, _ := p.Open(poolKey{profile: "pg-dev"})
 	if first == second {
 		t.Errorf("Open after Drop returned the stale connection")
 	}
@@ -115,9 +115,9 @@ func TestConnPoolKeysConnectionsByProfileAndDatabase(t *testing.T) {
 	opener, calls := countingOpener(nil)
 	p := newTestPool(opener)
 
-	a, _ := p.OpenIn("pg-multi", "one")
-	b, _ := p.OpenIn("pg-multi", "two")
-	a2, _ := p.OpenIn("pg-multi", "one")
+	a, _ := p.Open(poolKey{"pg-multi", "one"})
+	b, _ := p.Open(poolKey{"pg-multi", "two"})
+	a2, _ := p.Open(poolKey{"pg-multi", "one"})
 	if a == b {
 		t.Errorf("two databases of one Profile shared a connection")
 	}
@@ -129,21 +129,21 @@ func TestConnPoolKeysConnectionsByProfileAndDatabase(t *testing.T) {
 	}
 }
 
-func TestConnPoolReopenInTouchesOnlyThatDatabase(t *testing.T) {
+func TestConnPoolReopenTouchesOnlyThatDatabase(t *testing.T) {
 	opener, _ := countingOpener(nil)
 	p := newTestPool(opener)
 
-	a, _ := p.OpenIn("pg-multi", "one")
-	b, _ := p.OpenIn("pg-multi", "two")
-	a2, err := p.ReopenIn("pg-multi", "one")
+	a, _ := p.Open(poolKey{"pg-multi", "one"})
+	b, _ := p.Open(poolKey{"pg-multi", "two"})
+	a2, err := p.Reopen(poolKey{"pg-multi", "one"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !a.(*fakeDB).closed || a2 == a {
-		t.Errorf("ReopenIn did not replace the connection")
+		t.Errorf("Reopen did not replace the connection")
 	}
 	if b.(*fakeDB).closed {
-		t.Errorf("ReopenIn closed another database's connection")
+		t.Errorf("Reopen closed another database's connection")
 	}
 }
 
@@ -151,26 +151,14 @@ func TestConnPoolDropClosesEveryDatabaseOfTheProfile(t *testing.T) {
 	opener, _ := countingOpener(nil)
 	p := newTestPool(opener)
 
-	a, _ := p.OpenIn("pg-multi", "one")
-	b, _ := p.OpenIn("pg-multi", "two")
-	other, _ := p.OpenIn("pg-dev", "")
+	a, _ := p.Open(poolKey{"pg-multi", "one"})
+	b, _ := p.Open(poolKey{"pg-multi", "two"})
+	other, _ := p.Open(poolKey{"pg-dev", ""})
 	p.Drop("pg-multi")
 	if !a.(*fakeDB).closed || !b.(*fakeDB).closed {
 		t.Errorf("Drop left a database connection open")
 	}
 	if other.(*fakeDB).closed {
 		t.Errorf("Drop closed another Profile's connection")
-	}
-}
-
-func TestConnPoolDropInClosesOnePair(t *testing.T) {
-	opener, _ := countingOpener(nil)
-	p := newTestPool(opener)
-
-	a, _ := p.OpenIn("pg-multi", "one")
-	b, _ := p.OpenIn("pg-multi", "two")
-	p.DropIn("pg-multi", "one")
-	if !a.(*fakeDB).closed || b.(*fakeDB).closed {
-		t.Errorf("DropIn closed the wrong connections")
 	}
 }

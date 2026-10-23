@@ -27,7 +27,7 @@ func TestE2EPostgresDatabaseArgument(t *testing.T) {
 		t.Errorf("hqdb rows = %+v, want one count row", widgets.Rows)
 	}
 	msg := s.errText("run_query", map[string]any{"profile": "pg-multi", "database": "nope", "sql": "SELECT 1"})
-	if !strings.Contains(msg, `database "nope" is not available`) || !strings.Contains(msg, "hqdb_two") {
+	if !strings.HasPrefix(msg, unknownDBPrefix) || !strings.Contains(msg, "hqdb_two") {
 		t.Errorf("unknown database message = %q, want it to name the available ones", msg)
 	}
 	msg = s.errText("run_query", map[string]any{"profile": "pg-multi", "database": "hqdb_two", "sql": "DELETE FROM gadgets"})
@@ -69,7 +69,26 @@ func TestE2EPostgresSchemaColumnsDDLByPathDatabase(t *testing.T) {
 		t.Errorf("ddl = %q, want gadgets", d.Definition)
 	}
 	msg := s.errText("get_columns", map[string]any{"profile": "pg-multi", "path": []string{"nope", "public", "gadgets"}})
-	if !strings.Contains(msg, `database "nope" is not available`) {
+	if !strings.HasPrefix(msg, unknownDBPrefix) {
 		t.Errorf("unknown database message = %q", msg)
+	}
+}
+
+// unknownDBPrefix is the contract wording for a database the Profile does
+// not expose; the available ones follow it.
+const unknownDBPrefix = `database "nope" is not available for this profile; available: `
+
+func TestE2EPostgresUnknownDatabaseByEveryTool(t *testing.T) {
+	s := startE2E(t)
+	dest := filepath.Join(t.TempDir(), "x.csv")
+	for tool, args := range map[string]map[string]any{
+		"get_schema":   {"profile": "pg-multi", "path": []string{"nope"}},
+		"get_columns":  {"profile": "pg-multi", "path": []string{"nope", "public", "gadgets"}},
+		"get_ddl":      {"profile": "pg-multi", "path": []string{"nope", "public", "gadgets"}},
+		"export_query": {"profile": "pg-multi", "database": "nope", "sql": "SELECT 1", "dest_path": dest},
+	} {
+		if msg := s.errText(tool, args); !strings.HasPrefix(msg, unknownDBPrefix) {
+			t.Errorf("%s: message = %q, want prefix %q", tool, msg, unknownDBPrefix)
+		}
 	}
 }

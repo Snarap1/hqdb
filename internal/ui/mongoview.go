@@ -120,13 +120,13 @@ func onMongo(ctx context.Context, pool *connPool, profile string, fn func(*adapt
 		}
 		return fn(mc)
 	}
-	conn, err := pool.Open(profile)
+	conn, err := pool.Open(poolKey{profile: profile})
 	retryable := true
 	if err == nil {
 		retryable, err = run(conn)
 	}
 	if err != nil && retryable && ctx.Err() == nil {
-		conn2, rerr := pool.Reopen(profile)
+		conn2, rerr := pool.Reopen(poolKey{profile: profile})
 		if rerr != nil {
 			return err
 		}

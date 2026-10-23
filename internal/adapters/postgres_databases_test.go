@@ -2,10 +2,13 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestPostgresDSNDatabaseOverride(t *testing.T) {
@@ -65,24 +68,104 @@ func TestCheckDatabase(t *testing.T) {
 	}
 }
 
-func TestDiscoversDatabases(t *testing.T) {
+func TestDatabasesRefusesAdaptersWithoutDiscovery(t *testing.T) {
 	tests := []struct {
 		name string
 		p    map[string]any
-		want bool
+		want string
 	}{
-		{"postgres without dbname", map[string]any{"adapter": "postgres"}, true},
-		{"postgres with dbname", map[string]any{"adapter": "postgres", "dbname": "x"}, false},
-		{"postgres url with db", map[string]any{"adapter": "postgres", "conn_str": "postgres://u:p@h/x"}, false},
-		{"postgres url without db", map[string]any{"adapter": "postgres", "conn_str": "postgres://u:p@h"}, true},
-		{"mysql", map[string]any{"adapter": "mysql"}, false},
+		{"mysql", map[string]any{"adapter": "mysql"}, "database discovery is not available for mysql"},
+		{"clickhouse", map[string]any{"adapter": "clickhouse"}, "database discovery is not available for clickhouse"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := DiscoversDatabases(tc.p); got != tc.want {
-				t.Errorf("got %v, want %v", got, tc.want)
+			_, err := Databases(context.Background(), tc.p)
+			if err == nil || err.Error() != tc.want {
+				t.Errorf("got %v, want %q", err, tc.want)
 			}
 		})
+	}
+	// A narrowed postgres Profile needs no connection to answer.
+	got, err := (&SQL{kind: "postgres", profile: map[string]any{"adapter": "postgres", "dbname": "x"}}).Databases(context.Background())
+	if err != nil || !reflect.DeepEqual(got, []string{"x"}) {
+		t.Errorf("narrowed: got %v, %v", got, err)
+	}
+	_, err = (&SQL{kind: "mysql"}).Databases(context.Background())
+	if err == nil || err.Error() != "database discovery is not available for mysql" {
+		t.Errorf("non-postgres connection: got %v", err)
+	}
+}
+
+func TestDiscoverWithRetry(t *testing.T) {
+	pgErr := func(code string) error { return &pgconn.PgError{Severity: "FATAL", Code: code, Message: "m"} }
+	tests := []struct {
+		name      string
+		first     error
+		second    error
+		want      []string
+		wantErr   string // empty means no error
+		wantCalls []string
+	}{
+		{"default works", nil, nil, []string{"a"}, "", []string{""}},
+		{"default database missing, postgres works", pgErr("3D000"), nil, []string{"b"}, "", []string{"", "postgres"}},
+		{"no CONNECT on default, postgres works", pgErr("42501"), nil, []string{"b"}, "", []string{"", "postgres"}},
+		{"bad credentials are not retried", pgErr("28P01"), nil, nil, "FATAL: m (SQLSTATE 28P01)", []string{""}},
+		{"network failure is not retried", errors.New("dial tcp: refused"), nil, nil, "dial tcp: refused", []string{""}},
+		{"cancellation is not retried", context.Canceled, nil, nil, "context canceled", []string{""}},
+		{"both fail", pgErr("3D000"), errors.New("boom"), nil,
+			"FATAL: m (SQLSTATE 3D000) (retry against database postgres also failed: boom)", []string{"", "postgres"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			got, err := discoverWithRetry(context.Background(), func(_ context.Context, database string) ([]string, error) {
+				calls = append(calls, database)
+				if database == "" {
+					if tc.first != nil {
+						return nil, tc.first
+					}
+					return []string{"a"}, nil
+				}
+				if tc.second != nil {
+					return nil, tc.second
+				}
+				return []string{"b"}, nil
+			})
+			if !reflect.DeepEqual(calls, tc.wantCalls) {
+				t.Errorf("attempted databases %q, want %q", calls, tc.wantCalls)
+			}
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Errorf("got %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %v, %v, want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestBindsDatabaseAndPathDatabase(t *testing.T) {
+	for adapter, want := range map[string]bool{"postgres": true, "mysql": false, "mssql": false, "mongodb": false} {
+		if got := BindsDatabase(adapter); got != want {
+			t.Errorf("BindsDatabase(%q) = %v, want %v", adapter, got, want)
+		}
+	}
+	tests := []struct {
+		path []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{"db"}, "db"},
+		{[]string{"db", "public"}, "db"},
+		{[]string{"db", "public", "t"}, "db"},
+	}
+	for _, tc := range tests {
+		if got := PathDatabase(tc.path); got != tc.want {
+			t.Errorf("PathDatabase(%v) = %q, want %q", tc.path, got, tc.want)
+		}
 	}
 }
 

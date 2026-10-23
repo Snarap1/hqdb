@@ -27,8 +27,8 @@ import (
 type consoleSession struct {
 	mu      sync.Mutex
 	profile string
-	// database is the postgres Database the session is bound to, "" for
-	// the Profile's own.
+	// database is the postgres Database the session is bound to; "" for
+	// the Profile's own until the session opens and ensure learns it.
 	database string
 	db       adapters.DB
 	conn     *sql.Conn
@@ -44,22 +44,56 @@ func (s *consoleSession) ensure(ctx context.Context, pool *connPool) error {
 	if s.conn != nil {
 		return nil
 	}
-	db, err := pool.OpenDedicatedIn(s.profile, s.database)
+	db, conn, err := s.connect(ctx, pool, s.database)
+	if err != nil && s.database == "" && adapters.DefaultDatabaseUnusable(err) {
+		// A discovering postgres Profile whose login has no usable default
+		// Database: fall back to `postgres`, as discovery does (ADR-0004).
+		// A Profile with dbname refuses it there, keeping the first error.
+		if db2, conn2, err2 := s.connect(ctx, pool, "postgres"); err2 == nil {
+			db, conn, err, s.database = db2, conn2, nil, "postgres"
+		}
+	}
 	if err != nil {
 		return err
+	}
+	s.db, s.conn = db, conn
+	if s.database == "" && db.Kind() == "postgres" {
+		// A Console on a discovering Profile's own node is bound to the
+		// login's default Database; learn which, for the tab title. A
+		// failure leaves the title unqualified.
+		var name string
+		if conn.QueryRowContext(ctx, `SELECT current_database()`).Scan(&name) == nil {
+			s.database = name
+		}
+	}
+	return nil
+}
+
+// connect opens a dedicated connection to database of the session's
+// Profile and pins one *sql.Conn on it.
+func (s *consoleSession) connect(ctx context.Context, pool *connPool, database string) (adapters.DB, *sql.Conn, error) {
+	db, err := pool.OpenDedicated(poolKey{s.profile, database})
+	if err != nil {
+		return nil, nil, err
 	}
 	sqlDB, ok := db.(*adapters.SQL)
 	if !ok {
 		db.Close()
-		return adapters.ErrNotSQL(db.Kind(), "console")
+		return nil, nil, adapters.ErrNotSQL(db.Kind(), "console")
 	}
 	conn, err := sqlDB.SQL().Conn(ctx)
 	if err != nil {
 		db.Close()
-		return err
+		return nil, nil, err
 	}
-	s.db, s.conn = db, conn
-	return nil
+	return db, conn, nil
+}
+
+// boundDatabase is the Database the session is bound to, "" when unknown.
+func (s *consoleSession) boundDatabase() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.database
 }
 
 // sessionResetNotice follows a cancellation that dropped the pinned
@@ -166,6 +200,8 @@ type consoleMsg struct {
 	// when that dropped the pinned session.
 	cancelled    bool
 	sessionReset bool
+	// database is the Database the session ended up bound to.
+	database string
 }
 
 // consoleExportMsg reports a Console export's outcome.
@@ -202,6 +238,9 @@ func applyConsoleExportMsg(msg consoleExportMsg) {
 func applyConsoleMsg(msg consoleMsg) {
 	t := msg.tab
 	t.exportStatus = ""
+	if t.database == "" {
+		t.database = msg.database
+	}
 	if msg.cancelled {
 		// The previous result is gone with the interrupted statement's
 		// session; only the cancellation is shown.
@@ -251,7 +290,7 @@ func (t *consoleTab) execCmd(pool *connPool, stmt string) tea.Cmd {
 	s := t.session
 	return t.exec(stmt, func(ctx context.Context) tea.Msg {
 		res, reset, err := s.run(ctx, pool, stmt)
-		return consoleMsg{tab: t, stmt: stmt, res: res, err: err, cancelled: ctx.Err() != nil, sessionReset: reset}
+		return consoleMsg{tab: t, stmt: stmt, res: res, err: err, cancelled: ctx.Err() != nil, sessionReset: reset, database: s.boundDatabase()}
 	})
 }
 
