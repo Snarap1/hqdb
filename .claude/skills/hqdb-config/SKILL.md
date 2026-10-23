@@ -42,6 +42,14 @@ It prints one line per profile (adapter, access, `ok` or `FAIL` with the error) 
 6. Passwords live in the file in plain text.
    Never echo them into a committed config, a log, a chat message, or a committed example; use placeholders.
 
+## Postgres databases
+
+Omit `dbname` on a postgres profile to expose every database the login may connect to; set it to narrow the profile to one.
+Hold one profile per server and add `dbname` only where a database needs its own access mode.
+MCP clients pick a database with the `database` argument of `run_query` and `export_query`, or the first `path` element of `get_schema`, `get_columns`, and `get_ddl`.
+Each statement runs in one database; the account's privileges are the real boundary, and PgBouncer may list databases it does not route.
+Section 3 of the guide carries the details.
+
 ## When a config is right but queries fail
 
 On a read-only profile the screening rules refuse the statement, with `Refused (read-only profile): <reason>`.

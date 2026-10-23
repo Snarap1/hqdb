@@ -1,6 +1,6 @@
 # 05 - Docs
 
-Status: needs-triage
+Status: done
 Blocked by: 03, 04
 
 Update `docs/config-guide.md` (replace the "one profile per database" paragraph), `README.md`, and `.claude/skills/hqdb-config/`.

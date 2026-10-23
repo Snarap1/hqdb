@@ -21,7 +21,7 @@ Screening lives at the front ends, never in the core:
 - `internal/server` calls `screen(access, violation)`: refuse with `Refused (read-only profile): <reason>` on a read-only Profile, run unscreened on a read-write one.
 - `internal/ui` Consoles call `consoleCore.runOrAsk`: refuse a violation on a read-only Profile, otherwise ask before any write; the SQL Data view screens its typed WHERE/ORDER BY on a read-only Profile. `Model.bindAccess` hands each new tab its Profile's access.
 
-The MCP server opens a **fresh connection per tool call** and closes it after; the terminal UI keeps one lazy connection per Profile (`internal/ui/pool.go`) plus a dedicated session per SQL Console.
+The MCP server opens a **fresh connection per tool call** and closes it after; the terminal UI keeps one lazy connection per (Profile, Database) pair (`internal/ui/pool.go`; a postgres Profile without `dbname` discovers its Databases, ADR-0004) plus a dedicated session per SQL Console, bound to one Database.
 Every terminal UI tab kind implements the `tab` interface (`internal/ui/tab.go`); `adapterui.go` is the one per-Adapter dispatch table.
 Visual design follows `docs/ui/TUI database client.html`; colors live only in `theme.go`.
 
