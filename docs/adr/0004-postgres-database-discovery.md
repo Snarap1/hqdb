@@ -8,7 +8,7 @@ mysql and mongodb already expose every Database from one Profile, so postgres wa
 ## Discovery
 
 hqdb connects to the login's default database (no database in the startup message).
-It retries against `postgres` only when that database does not exist (SQLSTATE 3D000) or the login lacks `CONNECT` on it (42501); any other failure, such as bad credentials or an unreachable server, is reported as is.
+It retries against `postgres` only when that database does not exist (SQLSTATE 3D000) the login lacks `CONNECT` on it (42501), or `pg_hba.conf` has no entry for it (28000, common because the default database is named after the login); any other failure, such as bad credentials or an unreachable server, is reported as is.
 It then runs:
 
 ```sql

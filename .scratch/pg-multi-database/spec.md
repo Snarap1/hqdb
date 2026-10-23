@@ -15,7 +15,7 @@ A postgres Profile with `dbname` keeps today's behavior: that one database only,
 
 ### Discovery
 
-Connect to the login's default database (no database in the startup message); retry against `postgres` only if that database is missing or closed to the login (SQLSTATE 3D000 or 42501).
+Connect to the login's default database (no database in the startup message); retry against `postgres` only if that database is missing or closed to the login (SQLSTATE 3D000, 42501, or 28000 for a pg_hba.conf rejection).
 Then run:
 
 ```sql

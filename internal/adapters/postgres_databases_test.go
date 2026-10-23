@@ -109,6 +109,7 @@ func TestDiscoverWithRetry(t *testing.T) {
 		{"default works", nil, nil, []string{"a"}, "", []string{""}},
 		{"default database missing, postgres works", pgErr("3D000"), nil, []string{"b"}, "", []string{"", "postgres"}},
 		{"no CONNECT on default, postgres works", pgErr("42501"), nil, []string{"b"}, "", []string{"", "postgres"}},
+		{"pg_hba rejects default, postgres works", pgErr("28000"), nil, []string{"b"}, "", []string{"", "postgres"}},
 		{"bad credentials are not retried", pgErr("28P01"), nil, nil, "FATAL: m (SQLSTATE 28P01)", []string{""}},
 		{"network failure is not retried", errors.New("dial tcp: refused"), nil, nil, "dial tcp: refused", []string{""}},
 		{"cancellation is not retried", context.Canceled, nil, nil, "context canceled", []string{""}},

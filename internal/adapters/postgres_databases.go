@@ -91,9 +91,9 @@ func Databases(ctx context.Context, p map[string]any) ([]string, error) {
 
 // Databases is the package-level Databases on a connection that is already
 // open: the discovery query runs on it first, and only if the login's
-// default database is missing or closed to it does discovery retry against
-// `postgres`. Any other failure (credentials, network, cancellation) is
-// returned as is.
+// default database is missing, closed to it, or rejected by pg_hba.conf does
+// discovery retry against `postgres`. Any other failure (credentials,
+// network, cancellation) is returned as is.
 func (c *SQL) Databases(ctx context.Context) ([]string, error) {
 	if c.profile == nil {
 		return nil, errNoDiscovery(c.kind)
@@ -119,8 +119,8 @@ func (c *SQL) Databases(ctx context.Context) ([]string, error) {
 }
 
 // discoverWithRetry runs discover against the login's default database
-// ("") and, when that database is missing or closed to the login, against
-// `postgres`.
+// ("") and, when that database is unusable (see DefaultDatabaseUnusable),
+// against `postgres`.
 func discoverWithRetry(ctx context.Context, discover func(ctx context.Context, database string) ([]string, error)) ([]string, error) {
 	names, err := discover(ctx, "")
 	if err == nil || !DefaultDatabaseUnusable(err) {
@@ -135,11 +135,13 @@ func discoverWithRetry(ctx context.Context, discover func(ctx context.Context, d
 }
 
 // DefaultDatabaseUnusable reports whether err says the login's default
-// database does not exist (SQLSTATE 3D000) or the login lacks CONNECT on it
-// (42501), the two cases where `postgres` is worth trying.
+// database does not exist (SQLSTATE 3D000), the login lacks CONNECT on it
+// (42501), or pg_hba.conf has no entry for it (28000), the cases where
+// `postgres` is worth trying. pg_hba.conf matches on the database, and the
+// default one is named after the login, which a server often does not list.
 func DefaultDatabaseUnusable(err error) bool {
 	var pe *pgconn.PgError
-	return errors.As(err, &pe) && (pe.Code == "3D000" || pe.Code == "42501")
+	return errors.As(err, &pe) && (pe.Code == "3D000" || pe.Code == "42501" || pe.Code == "28000")
 }
 
 func queryDatabases(ctx context.Context, db *sql.DB) ([]string, error) {
