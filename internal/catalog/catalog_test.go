@@ -40,7 +40,20 @@ func TestLikeFilter(t *testing.T) {
 	}
 }
 
+func TestDialect(t *testing.T) {
+	for kind, want := range map[string]string{
+		"odbc": "mssql", "mssql": "mssql", "postgres": "postgres", "mysql": "mysql", "clickhouse": "clickhouse",
+	} {
+		if got := dialect(kind); got != want {
+			t.Errorf("dialect(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}
+
 func TestColumnsUsageExamples(t *testing.T) {
+	if got := columnsUsage("odbc"); got != `["hqdb", "public", "widgets"]` {
+		t.Errorf("odbc usage = %q", got)
+	}
 	if got := columnsUsage("postgres"); got != `["hqdb", "public", "widgets"]` {
 		t.Errorf("postgres usage = %q", got)
 	}

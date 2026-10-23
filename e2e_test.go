@@ -388,6 +388,32 @@ func TestE2EGetSchemaMySQL(t *testing.T) {
 	}
 }
 
+func TestE2EGetSchemaMSSQLAndODBC(t *testing.T) {
+	s := startE2E(t)
+	for _, profile := range []string{"ms-dev", "ms-odbc-dev"} {
+		var root catalog.SchemaOut
+		s.ok("get_schema", map[string]any{"profile": profile, "path": []string{}}, &root)
+		if !nodeNames(root.Nodes)["hqdb"] {
+			t.Errorf("%s: root nodes = %+v, want hqdb", profile, root.Nodes)
+		}
+		var schemas catalog.SchemaOut
+		s.ok("get_schema", map[string]any{"profile": profile, "path": []string{"hqdb"}}, &schemas)
+		if names := nodeNames(schemas.Nodes); !names["dbo"] || names["sys"] {
+			t.Errorf("%s: schema nodes = %+v, want dbo without sys", profile, schemas.Nodes)
+		}
+		var tables catalog.SchemaOut
+		s.ok("get_schema", map[string]any{"profile": profile, "path": []string{"hqdb", "dbo"}}, &tables)
+		if !nodeNames(tables.Nodes)["widgets"] {
+			t.Errorf("%s: table nodes = %+v, want widgets", profile, tables.Nodes)
+		}
+		var cols catalog.ColumnsOut
+		s.ok("get_columns", map[string]any{"profile": profile, "path": []string{"hqdb", "dbo", "widgets"}}, &cols)
+		if len(cols.Columns) == 0 {
+			t.Errorf("%s: columns = %+v, want widgets columns", profile, cols)
+		}
+	}
+}
+
 func TestE2EExportQuery(t *testing.T) {
 	s := startE2E(t)
 	dest := filepath.Join(t.TempDir(), "out.csv")

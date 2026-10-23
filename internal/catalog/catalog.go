@@ -148,9 +148,18 @@ func overCap(out *SchemaOut, limits Limits) bool {
 	return err == nil && len(b) > limits.CharCap
 }
 
+// dialect is the catalog dialect of an adapter kind: odbc is SQL Server
+// reached through an ODBC-style conn_str, so it walks the catalog as mssql.
+func dialect(kind string) string {
+	if kind == "odbc" {
+		return "mssql"
+	}
+	return kind
+}
+
 // sqlSchemaNodes dispatches the per-adapter catalog queries.
 func sqlSchemaNodes(ctx context.Context, conn *adapters.SQL, path []string, nameFilter string) ([]SchemaNode, error) {
-	switch conn.Kind() {
+	switch dialect(conn.Kind()) {
 	case "postgres":
 		return postgresSchema(ctx, conn, path, nameFilter)
 	case "mysql", "mssql":
@@ -208,7 +217,7 @@ func postgresSchema(ctx context.Context, conn *adapters.SQL, path []string, name
 // connection already bound to the Database the path names (postgres and
 // mssql serve one Database per connection).
 func relationalSchema(ctx context.Context, conn *adapters.SQL, path []string, nameFilter string) ([]SchemaNode, error) {
-	kind := conn.Kind()
+	kind := dialect(conn.Kind())
 	tables := func(schema string) ([]SchemaNode, error) {
 		rows, err := conn.SQL().QueryContext(ctx, rebindPlaceholders(sharedTablesQuery, kind), schema, likeFilter(nameFilter))
 		if err != nil {
@@ -402,7 +411,7 @@ func GetColumns(ctx context.Context, conn adapters.DB, path []string) (*ColumnsO
 
 // columnsUsage is the per-adapter path example in the too-short-path error.
 func columnsUsage(kind string) string {
-	if kind == "postgres" || kind == "mssql" {
+	if d := dialect(kind); d == "postgres" || d == "mssql" {
 		return `["hqdb", "public", "widgets"]`
 	}
 	return `["hqdb", "widgets"]`

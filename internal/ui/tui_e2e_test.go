@@ -1028,7 +1028,7 @@ func TestDataViewCellPopupCopyAndSearch(t *testing.T) {
 	enter(tm)
 	waitForFrameContaining(t, tm.Output(), "TAILMARK")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitForFrameContaining(t, tm.Output(), "needle one") // the grid is drawn again over the popup
+	waitForText(t, tm, "needle one") // the grid is drawn again over the popup
 
 	// y copies the cell via OSC52; Y copies the row as JSON.
 	tm.Send(tea.KeyPressMsg{Code: 'y', Text: "y"})
@@ -1042,7 +1042,7 @@ func TestDataViewCellPopupCopyAndSearch(t *testing.T) {
 	enter(tm)
 	waitForFrameContaining(t, tm.Output(), `"k": "v"`)
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitForFrameContaining(t, tm.Output(), "needle one") // the grid is drawn again over the popup
+	waitForText(t, tm, "needle one") // the grid is drawn again over the popup
 
 	// / searches the page and moves the cursor between matches.
 	tm.Send(tea.KeyPressMsg{Code: '/', Text: "/"})
