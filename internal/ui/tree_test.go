@@ -31,7 +31,7 @@ func shiftDKey() tea.KeyPressMsg {
 // opener actually ran (vs. was served from cache).
 func fakePool() (*connPool, *int) {
 	opener, calls := countingOpener(nil)
-	return &connPool{conns: map[string]adapters.DB{}, open: opener}, calls
+	return &connPool{conns: map[poolKey]adapters.DB{}, open: opener}, calls
 }
 
 func TestVisibleListsOnlyExpandedDescendants(t *testing.T) {
@@ -207,7 +207,7 @@ func TestRefreshResetsChildrenAndForcesProfileReconnect(t *testing.T) {
 	if len(root.children) != 0 || root.loaded {
 		t.Errorf("refresh did not reset children/loaded: children=%+v loaded=%v", root.children, root.loaded)
 	}
-	if _, ok := pool.conns[root.name]; ok {
+	if _, ok := pool.conns[poolKey{profile: root.name}]; ok {
 		t.Errorf("refresh on a Profile node did not drop the cached connection")
 	}
 	if *calls != 1 {
@@ -242,7 +242,7 @@ func TestDisconnectDropsConnectionAndCollapsesProfile(t *testing.T) {
 
 	tr.disconnect(pool)
 
-	if _, ok := pool.conns[root.name]; ok {
+	if _, ok := pool.conns[poolKey{profile: root.name}]; ok {
 		t.Errorf("disconnect did not drop the connection")
 	}
 	if root.expanded || root.loaded || len(root.children) != 0 {
@@ -289,7 +289,7 @@ func TestUpdateWiresExpandRefreshDisconnectKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr, _ = tr.Update(shiftDKey(), keys, pool)
-	if _, ok := pool.conns[tr.roots[0].name]; ok {
+	if _, ok := pool.conns[poolKey{profile: tr.roots[0].name}]; ok {
 		t.Errorf("D did not disconnect")
 	}
 }
@@ -400,7 +400,7 @@ func TestSingleLetterKeysTypedIntoFilterDoNotTriggerActions(t *testing.T) {
 	if len(root.children) != 1 {
 		t.Errorf("refresh fired despite filtering: children = %+v", root.children)
 	}
-	if _, ok := pool.conns[root.name]; !ok {
+	if _, ok := pool.conns[poolKey{profile: root.name}]; !ok {
 		t.Errorf("disconnect fired despite filtering: connection was dropped")
 	}
 }

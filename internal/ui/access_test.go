@@ -49,7 +49,7 @@ func TestConsoleAccess(t *testing.T) {
 }
 
 func TestReadOnlyConsoleRefusesAWriteInItsView(t *testing.T) {
-	tb := newConsoleTab("pg-dev", nil)
+	tb := newConsoleTab("pg-dev", "", nil)
 	tb.editor = editor{}.insert("DROP TABLE t")
 	tb.runCmd(nil)
 	v := ansi.Strip(tb.View(120, 30, true))

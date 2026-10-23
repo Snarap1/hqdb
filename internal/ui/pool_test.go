@@ -19,10 +19,10 @@ func (f *fakeDB) Close()       { f.closed = true }
 
 // countingOpener returns a new *fakeDB each call and records how many times
 // it was invoked, so tests can tell a cached connection from a fresh one.
-func countingOpener(err error) (opener func(string) (adapters.DB, error), calls *int) {
+func countingOpener(err error) (opener func(string, string) (adapters.DB, error), calls *int) {
 	n := 0
 	calls = &n
-	opener = func(string) (adapters.DB, error) {
+	opener = func(string, string) (adapters.DB, error) {
 		n++
 		if err != nil {
 			return nil, err
@@ -32,9 +32,13 @@ func countingOpener(err error) (opener func(string) (adapters.DB, error), calls 
 	return opener, calls
 }
 
+func newTestPool(opener func(string, string) (adapters.DB, error)) *connPool {
+	return &connPool{conns: map[poolKey]adapters.DB{}, open: opener}
+}
+
 func TestConnPoolOpenCachesConnection(t *testing.T) {
 	opener, calls := countingOpener(nil)
-	p := &connPool{conns: map[string]adapters.DB{}, open: opener}
+	p := newTestPool(opener)
 
 	c1, err := p.Open("pg-dev")
 	if err != nil {
@@ -55,7 +59,7 @@ func TestConnPoolOpenCachesConnection(t *testing.T) {
 func TestConnPoolOpenPropagatesError(t *testing.T) {
 	wantErr := errors.New("dial tcp: refused")
 	opener, _ := countingOpener(wantErr)
-	p := &connPool{conns: map[string]adapters.DB{}, open: opener}
+	p := newTestPool(opener)
 
 	_, err := p.Open("dead-dev")
 	if !errors.Is(err, wantErr) {
@@ -65,7 +69,7 @@ func TestConnPoolOpenPropagatesError(t *testing.T) {
 
 func TestConnPoolReopenClosesOldAndOpensFresh(t *testing.T) {
 	opener, calls := countingOpener(nil)
-	p := &connPool{conns: map[string]adapters.DB{}, open: opener}
+	p := newTestPool(opener)
 
 	first, _ := p.Open("pg-dev")
 	second, err := p.Reopen("pg-dev")
@@ -85,7 +89,7 @@ func TestConnPoolReopenClosesOldAndOpensFresh(t *testing.T) {
 
 func TestConnPoolDropClosesAndNextOpenIsFresh(t *testing.T) {
 	opener, calls := countingOpener(nil)
-	p := &connPool{conns: map[string]adapters.DB{}, open: opener}
+	p := newTestPool(opener)
 
 	first, _ := p.Open("pg-dev")
 	p.Drop("pg-dev")
@@ -103,6 +107,70 @@ func TestConnPoolDropClosesAndNextOpenIsFresh(t *testing.T) {
 
 func TestConnPoolDropOfUnknownProfileIsNoop(t *testing.T) {
 	opener, _ := countingOpener(nil)
-	p := &connPool{conns: map[string]adapters.DB{}, open: opener}
+	p := newTestPool(opener)
 	p.Drop("never-opened") // must not panic
+}
+
+func TestConnPoolKeysConnectionsByProfileAndDatabase(t *testing.T) {
+	opener, calls := countingOpener(nil)
+	p := newTestPool(opener)
+
+	a, _ := p.OpenIn("pg-multi", "one")
+	b, _ := p.OpenIn("pg-multi", "two")
+	a2, _ := p.OpenIn("pg-multi", "one")
+	if a == b {
+		t.Errorf("two databases of one Profile shared a connection")
+	}
+	if a != a2 {
+		t.Errorf("same (Profile, database) opened twice")
+	}
+	if *calls != 2 {
+		t.Errorf("opener called %d times, want 2", *calls)
+	}
+}
+
+func TestConnPoolReopenInTouchesOnlyThatDatabase(t *testing.T) {
+	opener, _ := countingOpener(nil)
+	p := newTestPool(opener)
+
+	a, _ := p.OpenIn("pg-multi", "one")
+	b, _ := p.OpenIn("pg-multi", "two")
+	a2, err := p.ReopenIn("pg-multi", "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.(*fakeDB).closed || a2 == a {
+		t.Errorf("ReopenIn did not replace the connection")
+	}
+	if b.(*fakeDB).closed {
+		t.Errorf("ReopenIn closed another database's connection")
+	}
+}
+
+func TestConnPoolDropClosesEveryDatabaseOfTheProfile(t *testing.T) {
+	opener, _ := countingOpener(nil)
+	p := newTestPool(opener)
+
+	a, _ := p.OpenIn("pg-multi", "one")
+	b, _ := p.OpenIn("pg-multi", "two")
+	other, _ := p.OpenIn("pg-dev", "")
+	p.Drop("pg-multi")
+	if !a.(*fakeDB).closed || !b.(*fakeDB).closed {
+		t.Errorf("Drop left a database connection open")
+	}
+	if other.(*fakeDB).closed {
+		t.Errorf("Drop closed another Profile's connection")
+	}
+}
+
+func TestConnPoolDropInClosesOnePair(t *testing.T) {
+	opener, _ := countingOpener(nil)
+	p := newTestPool(opener)
+
+	a, _ := p.OpenIn("pg-multi", "one")
+	b, _ := p.OpenIn("pg-multi", "two")
+	p.DropIn("pg-multi", "one")
+	if !a.(*fakeDB).closed || b.(*fakeDB).closed {
+		t.Errorf("DropIn closed the wrong connections")
+	}
 }

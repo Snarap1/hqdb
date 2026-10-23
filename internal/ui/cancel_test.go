@@ -22,7 +22,7 @@ func TestCtrlCWithNothingRunningDoesNotQuit(t *testing.T) {
 		m := newTestModel()
 		m.focus = focus
 		if focus == paneMain {
-			m.tabs = []tab{newConsoleTab("alpha", nil)}
+			m.tabs = []tab{newConsoleTab("alpha", "", nil)}
 		}
 		_, cmd := m.handleKey(ctrlC())
 		if isQuit(cmd) {

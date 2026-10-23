@@ -27,9 +27,12 @@ import (
 type consoleSession struct {
 	mu      sync.Mutex
 	profile string
-	db      adapters.DB
-	conn    *sql.Conn
-	closed  bool
+	// database is the postgres Database the session is bound to, "" for
+	// the Profile's own.
+	database string
+	db       adapters.DB
+	conn     *sql.Conn
+	closed   bool
 }
 
 // ensure opens the pinned session if it is not open yet; the caller holds
@@ -41,7 +44,7 @@ func (s *consoleSession) ensure(ctx context.Context, pool *connPool) error {
 	if s.conn != nil {
 		return nil
 	}
-	db, err := pool.OpenDedicated(s.profile)
+	db, err := pool.OpenDedicatedIn(s.profile, s.database)
 	if err != nil {
 		return err
 	}
@@ -139,9 +142,10 @@ type consoleTab struct {
 	exportStatus string
 }
 
-func newConsoleTab(profile string, state *consolestate.Store) *consoleTab {
-	t := &consoleTab{session: &consoleSession{profile: profile}}
+func newConsoleTab(profile, database string, state *consolestate.Store) *consoleTab {
+	t := &consoleTab{session: &consoleSession{profile: profile, database: database}}
 	t.init(profile, "SQL", state)
+	t.database = database
 	return t
 }
 

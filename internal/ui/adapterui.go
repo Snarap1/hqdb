@@ -22,8 +22,10 @@ var sqlAdapterUI = adapterUI{
 		dv := newDataViewTab(n.profile, n.adapter, n.path)
 		return dv, dv.loadCmd(pool)
 	},
-	openConsole: func(_ *node, profile string, state *consolestate.Store) tab {
-		return newConsoleTab(profile, state)
+	// A postgres Console binds to the Database n is in (ADR-0004), else to
+	// the Profile's own; poolDatabase is "" for every other Adapter.
+	openConsole: func(n *node, profile string, state *consolestate.Store) tab {
+		return newConsoleTab(profile, poolDatabase(n.adapter, n.path), state)
 	},
 }
 

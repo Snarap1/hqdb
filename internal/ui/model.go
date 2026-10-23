@@ -316,7 +316,7 @@ func (m *Model) openDDLIfTable(n *node) tea.Cmd {
 	if n == nil || !n.isDDLTable() {
 		return nil
 	}
-	t, cmd := openDDLCmd(m.pool, n.profile, n.path)
+	t, cmd := openDDLCmd(m.pool, n.profile, n.adapter, n.path)
 	m.tabs = append(m.tabs, t)
 	m.activeTab = len(m.tabs) - 1
 	return cmd
