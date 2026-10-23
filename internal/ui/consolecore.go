@@ -20,6 +20,9 @@ import (
 // statement.
 type consoleCore struct {
 	profile string
+	// database is the postgres Database a SQL Console is bound to
+	// (ADR-0004), shown in its title; "" for the Profile's own database.
+	database string
 	// access is the Profile's access mode; the zero value is read-only.
 	access config.Access
 	// tag names the Console kind in the tab bar (SQL, MONGO, REDIS).
@@ -48,10 +51,19 @@ func (c *consoleCore) init(profile, tag string, state *consolestate.Store) {
 	c.editor = editor{}.insert(c.hist.restoredBuffer())
 }
 
-func (c *consoleCore) Title() string { return c.profile + " (Console)" }
+func (c *consoleCore) Title() string {
+	if c.database != "" {
+		return c.profile + ": " + c.database + " (Console)"
+	}
+	return c.profile + " (Console)"
+}
 
 func (c *consoleCore) Heading() tabHeading {
-	return tabHeading{tag: c.tag, profile: c.profile, object: "console"}
+	object := "console"
+	if c.database != "" {
+		object = c.database + " console"
+	}
+	return tabHeading{tag: c.tag, profile: c.profile, object: object}
 }
 
 // Cancel cancels the Console's running work (Ctrl+C).

@@ -17,7 +17,7 @@ import (
 func blockingPool() (pool *connPool, opened, release chan struct{}) {
 	opened, release = make(chan struct{}), make(chan struct{})
 	first := true
-	pool = &connPool{conns: map[string]adapters.DB{}, open: func(string) (adapters.DB, error) {
+	pool = &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
 		if first {
 			first = false
 			close(opened)
@@ -70,7 +70,7 @@ func TestCtrlCCancelsAMongoCount(t *testing.T) {
 
 func TestCtrlCCancelsADDLLoad(t *testing.T) {
 	pool, opened, release := blockingPool()
-	tb, cmd := openDDLCmd(pool, "pg-dev", []string{"hqdb", "public", "widgets"})
+	tb, cmd := openDDLCmd(pool, "pg-dev", "postgres", []string{"hqdb", "public", "widgets"})
 	applyDDLMsg(runCancelled(t, cmd, opened, release, tb.Cancel).(ddlMsg))
 	v := ansi.Strip(tb.View(100, 30, true))
 	if !strings.Contains(v, "load cancelled") || strings.Contains(v, "offline") || strings.Contains(v, "Loading") {
@@ -89,7 +89,7 @@ func TestCtrlCCancelsARedisKeyLoad(t *testing.T) {
 }
 
 func TestLoadTabsAreCancellableFromTheModel(t *testing.T) {
-	ddl, _ := openDDLCmd(nil, "pg-dev", []string{"hqdb", "public", "widgets"})
+	ddl, _ := openDDLCmd(nil, "pg-dev", "postgres", []string{"hqdb", "public", "widgets"})
 	key, _ := openRedisKeyCmd(nil, "redis-dev", []string{"k"})
 	for _, tb := range []tab{newMongoTab("mongo-dev", []string{"hqdb", "w"}), ddl, key} {
 		if _, ok := tb.(tabCanceller); !ok {

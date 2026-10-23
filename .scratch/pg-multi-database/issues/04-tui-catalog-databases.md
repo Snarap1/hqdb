@@ -1,6 +1,6 @@
 # 04 - TUI: databases in Catalog, pool keyed by database
 
-Status: needs-triage
+Status: done
 Blocked by: 02
 
 - Catalog: database level under a postgres Profile without `dbname`.

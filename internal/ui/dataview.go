@@ -141,7 +141,7 @@ func (d *dataViewTab) loadCmd(pool *connPool) tea.Cmd {
 	if err == nil {
 		err = d.screen()
 	}
-	profile := d.profile
+	profile, database := d.profile, d.database()
 	d.notice = ""
 	ctx, done := d.work.start()
 	return func() tea.Msg {
@@ -149,7 +149,7 @@ func (d *dataViewTab) loadCmd(pool *connPool) tea.Cmd {
 		if err != nil {
 			return pageViewMsg{tab: d, err: err}
 		}
-		res, err := runOnProfile(ctx, pool, profile, sqlText)
+		res, err := runOnProfile(ctx, pool, profile, database, sqlText)
 		return pageViewMsg{tab: d, result: res, err: err, cancelled: ctx.Err() != nil}
 	}
 }
@@ -159,7 +159,7 @@ func (d *dataViewTab) loadCmd(pool *connPool) tea.Cmd {
 // connection the server dropped recovers without the caller doing
 // anything, mirroring loadCmd in load.go. (A bad WHERE is retried too;
 // it fails the same way twice and its error is what the user sees.)
-func runOnProfile(ctx context.Context, pool *connPool, profile, sqlText string) (*query.Result, error) {
+func runOnProfile(ctx context.Context, pool *connPool, profile, database, sqlText string) (*query.Result, error) {
 	run := func(conn adapters.DB) (*query.Result, error) {
 		sqlConn, ok := conn.(*adapters.SQL)
 		if !ok {
@@ -167,13 +167,13 @@ func runOnProfile(ctx context.Context, pool *connPool, profile, sqlText string) 
 		}
 		return query.Run(ctx, sqlConn.SQL(), sqlText, 0)
 	}
-	conn, err := pool.Open(profile)
+	conn, err := pool.OpenIn(profile, database)
 	var res *query.Result
 	if err == nil {
 		res, err = run(conn)
 	}
 	if err != nil && ctx.Err() == nil {
-		conn2, rerr := pool.Reopen(profile)
+		conn2, rerr := pool.ReopenIn(profile, database)
 		if rerr != nil {
 			return nil, rerr
 		}
@@ -199,7 +199,7 @@ func (d *dataViewTab) countCmd(pool *connPool) tea.Cmd {
 	if err == nil {
 		err = d.screen()
 	}
-	profile, where := d.profile, d.where
+	profile, database, where := d.profile, d.database(), d.where
 	d.notice = ""
 	ctx, done := d.work.start()
 	return func() tea.Msg {
@@ -207,7 +207,7 @@ func (d *dataViewTab) countCmd(pool *connPool) tea.Cmd {
 		if err != nil {
 			return countViewMsg{tab: d, where: where, err: err}
 		}
-		res, err := runOnProfile(ctx, pool, profile, sqlText)
+		res, err := runOnProfile(ctx, pool, profile, database, sqlText)
 		if err != nil {
 			return countViewMsg{tab: d, where: where, err: err, cancelled: ctx.Err() != nil}
 		}
@@ -527,3 +527,7 @@ func (d *dataViewTab) updateFieldInput(k tea.KeyPressMsg, pool *connPool) tea.Cm
 }
 
 func (d *dataViewTab) cellPopupOpen() bool { return d.grid.popupOpen() }
+
+// database is the Database this Data view's connection is bound to (see
+// poolDatabase).
+func (d *dataViewTab) database() string { return poolDatabase(d.adapter, d.path) }
