@@ -92,6 +92,11 @@ CREATE TABLE analytics.widgets_extra(id serial primary key, label text);
 INSERT INTO analytics.widgets_extra(label) VALUES ('extra');
 CREATE VIEW analytics.cheap_widgets AS SELECT id, name, price FROM public.widgets WHERE price < 2;
 SQL
+  docker exec -i "$PG_NAME" psql -U hq -d postgres -v ON_ERROR_STOP=1 -q -c 'CREATE DATABASE hqdb_two'
+  docker exec -i "$PG_NAME" psql -U hq -d hqdb_two -v ON_ERROR_STOP=1 -q <<'SQL'
+CREATE TABLE public.gadgets(id serial primary key, name text);
+INSERT INTO public.gadgets(name) VALUES ('sprocket');
+SQL
   docker exec "$MY_NAME" mysql -uroot -prootpw -e "
     CREATE DATABASE hqdb2;
     CREATE TABLE hqdb.widgets(id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64), price DECIMAL(10,2));

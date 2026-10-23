@@ -182,6 +182,62 @@ func rebindPlaceholders(query string, kind string) string {
 // relationalSchema walks databases, then schemas, then tables.
 func relationalSchema(ctx context.Context, conn *adapters.SQL, path []string, nameFilter string) ([]SchemaNode, error) {
 	kind := conn.Kind()
+	if kind == "postgres" && conn.Profile() != nil {
+		return postgresSchema(ctx, conn, path, nameFilter)
+	}
+	return relationalSchemaIn(ctx, conn, path, nameFilter)
+}
+
+// postgresSchema lists the Profile's discovered Databases at the top level
+// (ADR-0004) and runs every deeper level on the named Database's own
+// connection, since a postgres connection is bound to one Database.
+func postgresSchema(ctx context.Context, conn *adapters.SQL, path []string, nameFilter string) ([]SchemaNode, error) {
+	if len(path) == 0 {
+		dbs, err := adapters.Databases(ctx, conn.Profile())
+		if err != nil {
+			return nil, err
+		}
+		nodes := make([]SchemaNode, len(dbs))
+		for i, d := range dbs {
+			nodes[i] = SchemaNode{Name: d, Kind: "database"}
+		}
+		return nodes, nil
+	}
+	target, closeTarget, err := ConnForDatabase(ctx, conn, path[0])
+	if err != nil {
+		return nil, err
+	}
+	defer closeTarget()
+	return relationalSchemaIn(ctx, target, path, nameFilter)
+}
+
+// ConnForDatabase returns a connection bound to database: conn itself when
+// it already is, otherwise a fresh connection opened with
+// adapters.OpenDatabase (which refuses a Database the Profile does not
+// expose, listing the available ones). The returned func releases whatever
+// was opened and is always safe to call. Adapters that do not discover
+// Databases get conn back unchanged.
+func ConnForDatabase(ctx context.Context, conn *adapters.SQL, database string) (*adapters.SQL, func(), error) {
+	noop := func() {}
+	if database == "" || conn.Kind() != "postgres" || conn.Profile() == nil {
+		return conn, noop, nil
+	}
+	var current string
+	if err := conn.SQL().QueryRowContext(ctx, `SELECT current_database()`).Scan(&current); err == nil && current == database {
+		return conn, noop, nil
+	}
+	other, err := adapters.OpenDatabase(ctx, conn.Profile(), database)
+	if err != nil {
+		return nil, noop, err
+	}
+	return other.(*adapters.SQL), other.Close, nil
+}
+
+// relationalSchemaIn is relationalSchema on a connection already bound to
+// the Database the path names (for postgres and mssql, which serve one
+// Database per connection).
+func relationalSchemaIn(ctx context.Context, conn *adapters.SQL, path []string, nameFilter string) ([]SchemaNode, error) {
+	kind := conn.Kind()
 	tables := func(schema string) ([]SchemaNode, error) {
 		rows, err := conn.SQL().QueryContext(ctx, rebindPlaceholders(sharedTablesQuery, kind), schema, likeFilter(nameFilter))
 		if err != nil {

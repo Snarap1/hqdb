@@ -1,6 +1,6 @@
 # 02 - Discovery and per-database connections
 
-Status: needs-triage
+Status: done
 Blocked by: 01
 
 - Adapter-level function that, for a postgres Profile without `dbname`, connects (default database, then `postgres` fallback) and returns the discovered database list.

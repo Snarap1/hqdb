@@ -547,7 +547,7 @@ func TestDDLKeyDoesNothingAndIsNotHintedOnARedisProfileNode(t *testing.T) {
 	// selection afterwards and observing a fresh frame.
 	tm.Send(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyUp})
-	frame = waitForFrameContaining(t, tm.Output(), "pg-dev")
+	frame = waitForFrameContaining(t, tm.Output(), "▌▸ pg-")
 	if bytes.Contains(frame, []byte("(DDL)")) {
 		t.Errorf("d on a redis node must not have opened a DDL tab:\n%s", frame)
 	}

@@ -35,7 +35,14 @@ type DB interface {
 type SQL struct {
 	kind string
 	db   *sql.DB
+	// profile is the Profile this connection was opened from, kept so a
+	// caller can open sibling connections to other Databases of the same
+	// server (OpenDatabase) without being handed the Profile again.
+	profile map[string]any
 }
+
+// Profile is the Profile this connection was opened from.
+func (c *SQL) Profile() map[string]any { return c.profile }
 
 func (c *SQL) Kind() string { return c.kind }
 func (c *SQL) Close()       { _ = c.db.Close() }
@@ -139,56 +146,8 @@ func pgDSN(pairs ...string) string {
 	return strings.Join(kept, " ")
 }
 
-func openPostgres(p map[string]any) (DB, error) {
-	p, err := config.FillFromURL(p, "postgres")
-	if err != nil {
-		return nil, err
-	}
-	host, port, err := hostPort(p, "localhost", 5432)
-	if err != nil {
-		return nil, err
-	}
-	user, err := config.OptStr(p, "user")
-	if err != nil {
-		return nil, err
-	}
-	pass, err := config.OptStr(p, "password")
-	if err != nil {
-		return nil, err
-	}
-	dbname, err := config.DBOpt(p)
-	if err != nil {
-		return nil, err
-	}
-	sslmode, err := config.OptStr(p, "sslmode")
-	if err != nil {
-		return nil, err
-	}
-	if sslmode == "" {
-		sslmode = "prefer"
-	}
-	// An empty dbname is omitted rather than written as `dbname=`: the pgx
-	// keyword/value parser reads an empty value as "the next token", so a
-	// bare `dbname=` swallows the following pair and the server then fails
-	// with `database "sslmode=prefer" does not exist`. Omitting it leaves
-	// Config.Database empty, so the startup message carries no database and
-	// the server falls back to the login's default database.
-	dsn := pgDSN(
-		pgKV("host", host),
-		pgKV("port", strconv.Itoa(port)),
-		pgKV("user", user),
-		pgKV("password", pass),
-		pgKV("dbname", dbname),
-		pgKV("sslmode", sslmode),
-	)
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, err
-	}
-	return &SQL{kind: "postgres", db: db}, nil
-}
-
 func openMySQL(p map[string]any) (DB, error) {
+	origin := p
 	p, err := config.FillFromURL(p, "mysql")
 	if err != nil {
 		return nil, err
@@ -222,10 +181,11 @@ func openMySQL(p map[string]any) (DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SQL{kind: "mysql", db: db}, nil
+	return &SQL{kind: "mysql", db: db, profile: origin}, nil
 }
 
 func openMSSQL(p map[string]any, adapter string) (DB, error) {
+	origin := p
 	var host string
 	var port int
 	var user, pass, dbname, encrypt string
@@ -279,7 +239,7 @@ func openMSSQL(p map[string]any, adapter string) (DB, error) {
 	// matching the '?' convention the catalog and ddl packages use for
 	// every other adapter.
 	db := sql.OpenDB(mssql.NewConnectorWithProcessQueryText(params))
-	return &SQL{kind: adapter, db: db}, nil
+	return &SQL{kind: adapter, db: db, profile: origin}, nil
 }
 
 // odbcConn is the subset of an ODBC connection string hqdb understands.
@@ -405,6 +365,7 @@ func clickhouseProtocol(name string) (clickhouse.Protocol, error) {
 }
 
 func openClickHouse(p map[string]any) (DB, error) {
+	origin := p
 	p, err := config.FillFromURL(p, "clickhouse")
 	if err != nil {
 		return nil, err
@@ -456,7 +417,7 @@ func openClickHouse(p map[string]any) (DB, error) {
 		opts.TLS = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}
 	}
 	db := clickhouse.OpenDB(opts)
-	return &SQL{kind: "clickhouse", db: db}, nil
+	return &SQL{kind: "clickhouse", db: db, profile: origin}, nil
 }
 
 func openRedis(p map[string]any) (DB, error) {
