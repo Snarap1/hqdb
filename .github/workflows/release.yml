@@ -1,0 +1,106 @@
+name: release
+
+# Builds static binaries for every supported platform on a tag push and attaches
+# them to a GitHub release, so install.sh has something to download.
+# Cut a release with: git tag v1.0.0 && git push origin v1.0.0
+
+on:
+  push:
+    tags:
+      - "v*"
+
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: arm }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Test
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: go test ./...
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/hqdb$ext" .
+
+      - name: Archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          # The binary sits at the archive root, so the installers extract it by
+          # name. Asset names carry no version: install.sh then reaches the newest
+          # build through the releases/latest/download alias.
+          asset="hqdb_${GOOS}_${GOARCH}"
+          if [ "$GOOS" = "windows" ]; then
+            zip -qj "dist/${asset}.zip" "dist/hqdb$ext"
+          else
+            tar -czf "dist/${asset}.tar.gz" -C dist "hqdb$ext"
+          fi
+          # Leave only the archive, so upload-artifact does not also ship the raw binaries.
+          rm -f "dist/hqdb$ext"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hqdb-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # gh release create --generate-notes reads the commit log, so this job
+      # needs a repository, not just the downloaded artifacts.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz *.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+          # Clobbering keeps a re-run of the workflow idempotent.
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

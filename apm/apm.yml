@@ -1,0 +1,17 @@
+name: hqdb
+version: 1.0.0
+description: Registers the hqdb database MCP server (hqdb mcp) with a harness. Ships no skills; configuration is documented in the repository guide.
+author: Snarap1
+license: MIT
+homepage: https://github.com/Snarap1/hqdb
+repository: https://github.com/Snarap1/hqdb
+
+dependencies:
+  apm: []
+  mcp:
+    - name: hqdb
+      registry: false
+      transport: stdio
+      command: hqdb
+      args:
+        - mcp

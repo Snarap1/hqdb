@@ -1,0 +1,7 @@
+/hqdb
+/hq
+/apm/build
+/apm/apm.lock.yaml
+__pycache__/
+.claude/settings.local.json
+/hq-mcp

@@ -1,0 +1,36 @@
+# The config docs/demo.tape records docs/demo.gif against: the Docker
+# fixtures from testdata/fixtures.sh under friendlier names. Loopback hosts
+# and throwaway credentials only.
+
+default_profile = "analytics"
+
+[profiles.analytics]
+adapter = "postgres"
+host = "127.0.0.1"
+port = 55432
+user = "hq"
+password = "hq"
+dbname = "hqdb"
+
+[profiles.app-dev]
+adapter = "postgres"
+access = "read-write"
+host = "127.0.0.1"
+port = 55432
+user = "hq"
+password = "hq"
+dbname = "hqdb"
+
+[profiles.catalog]
+adapter = "mongodb"
+host = "127.0.0.1"
+port = 57017
+user = "hq"
+password = "hq"
+auth_source = "admin"
+database = "hqdb"
+
+[profiles.sessions]
+adapter = "redis"
+host = "127.0.0.1"
+port = 56379
