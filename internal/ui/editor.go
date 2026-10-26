@@ -30,6 +30,12 @@ func (e editor) insert(s string) editor {
 	return e
 }
 
+// paste inserts pasted text at the cursor, line breaks normalized and tabs
+// expanded the way the tab key types them.
+func (e editor) paste(s string) editor {
+	return e.insert(strings.ReplaceAll(normalizeNewlines(s), "\t", "  "))
+}
+
 // lineBounds returns the rune offsets of the start and end (exclusive of
 // "\n") of the line holding offset i.
 func (e editor) lineBounds(i int) (int, int) {

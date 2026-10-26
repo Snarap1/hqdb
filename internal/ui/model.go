@@ -117,6 +117,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
+	case tea.PasteMsg:
+		return m.handlePaste(msg.Content)
+
 	case catalogMsg:
 		applyCatalogMsg(msg)
 		return m, nil
@@ -421,6 +424,23 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, t.Update(msg, m.keys, m.pool)
+	}
+	return m, nil
+}
+
+// handlePaste delivers pasted text to the text field with focus: the
+// tree's name filter, or the active tab's field when it implements paster.
+func (m Model) handlePaste(text string) (tea.Model, tea.Cmd) {
+	if m.focus == paneTree {
+		if !m.tree.filtering {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.tree, cmd = m.tree.pasteFilter(text, m.pool)
+		return m, cmd
+	}
+	if p, ok := m.activeTabOrNil().(paster); ok {
+		p.Paste(text)
 	}
 	return m, nil
 }

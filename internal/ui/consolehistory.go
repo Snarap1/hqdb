@@ -83,6 +83,17 @@ func (h *consoleHistory) position() string {
 	return fmt.Sprintf("history %d/%d", h.pos+1, len(h.entries))
 }
 
+// paste inserts text into a Console editor e and saves the changed buffer,
+// like a typed edit.
+func (h *consoleHistory) paste(e editor, text string) editor {
+	before := e.text()
+	e = e.paste(text)
+	if e.text() != before {
+		h.edited(e.text())
+	}
+	return e
+}
+
 // editKey applies a key typed into a Console editor e: the history keys
 // recall, anything else edits e and saves a changed buffer. Every Console
 // kind routes its editor keys through it.

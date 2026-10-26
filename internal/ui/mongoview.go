@@ -771,6 +771,17 @@ func (t *mongoTab) View(width, height int, focused bool) string {
 	return top + withFooter(body, footer, bodyHeight+1)
 }
 
+// Paste goes to the open page-size field (digits only) or the WHERE,
+// ORDER BY, or export field (flattened to one line).
+func (t *mongoTab) Paste(text string) {
+	switch {
+	case t.editingPageSize:
+		t.pageSizeInput += digitsOnly(text)
+	case t.editing != fieldNone:
+		t.fieldInput += singleLine(text)
+	}
+}
+
 func (t *mongoTab) Update(k tea.KeyPressMsg, keys keyMap, pool *connPool) tea.Cmd {
 	if t.editingPageSize {
 		return t.updatePageSizeInput(k, pool)

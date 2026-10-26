@@ -154,6 +154,15 @@ func (c *consoleCore) updateFront(msg tea.KeyPressMsg, keys keyMap, resultsModal
 	return nil, false
 }
 
+// Paste inserts text into the editor while it has focus; a pending
+// confirmation or the results area ignores it.
+func (c *consoleCore) Paste(text string) {
+	if c.confirm.pending() || !c.editing {
+		return
+	}
+	c.editor = c.hist.paste(c.editor, text)
+}
+
 // clickEditor focuses the editor on a click in it and reports the results
 // area's top when the click landed below it instead (ok true).
 func (c *consoleCore) clickEditor(y, height int) (top int, ok bool) {

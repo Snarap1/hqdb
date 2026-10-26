@@ -413,6 +413,17 @@ func (d *dataViewTab) View(width, height int, focused bool) string {
 	return header + "\n" + d.fieldsLine(width) + "\n" + withFooter(body, footer, height-dataViewGridTop)
 }
 
+// Paste goes to the open page-size field (digits only) or the WHERE,
+// ORDER BY, or export field (flattened to one line).
+func (d *dataViewTab) Paste(text string) {
+	switch {
+	case d.editingPageSize:
+		d.pageSizeInput += digitsOnly(text)
+	case d.editing != fieldNone:
+		d.fieldInput += singleLine(text)
+	}
+}
+
 func (d *dataViewTab) Update(k tea.KeyPressMsg, keys keyMap, pool *connPool) tea.Cmd {
 	if d.editingPageSize {
 		return d.updatePageSizeInput(k, pool)

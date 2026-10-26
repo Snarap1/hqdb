@@ -355,6 +355,16 @@ func (t *consoleTab) Update(msg tea.KeyPressMsg, keys keyMap, pool *connPool) te
 	return nil
 }
 
+// Paste goes to the export path field while it is open, else to the
+// editor.
+func (t *consoleTab) Paste(text string) {
+	if t.exporting && !t.confirm.pending() {
+		t.exportInput += singleLine(text)
+		return
+	}
+	t.consoleCore.Paste(text)
+}
+
 // CopyText is the current result cell, for the global copy key.
 func (t *consoleTab) CopyText() (string, bool) {
 	if !t.hasGrid {

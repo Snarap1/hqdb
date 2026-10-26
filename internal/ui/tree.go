@@ -204,8 +204,20 @@ func (t catalogTree) updateFilter(k tea.KeyPressMsg, pool *connPool) (catalogTre
 		return t, nil
 	}
 
+	return t.updateFilterInput(k, pool)
+}
+
+// pasteFilter inserts pasted text, flattened to one line, into the name
+// filter field.
+func (t catalogTree) pasteFilter(text string, pool *connPool) (catalogTree, tea.Cmd) {
+	return t.updateFilterInput(tea.PasteMsg{Content: singleLine(text)}, pool)
+}
+
+// updateFilterInput passes msg to the filter field and re-narrows the tree
+// when the query changed.
+func (t catalogTree) updateFilterInput(msg tea.Msg, pool *connPool) (catalogTree, tea.Cmd) {
 	var cmd tea.Cmd
-	t.filterInput, cmd = t.filterInput.Update(k)
+	t.filterInput, cmd = t.filterInput.Update(msg)
 	query := t.filterInput.Value()
 	if query == t.filterQuery {
 		return t, cmd
