@@ -166,6 +166,10 @@ func (t catalogTree) Update(msg tea.Msg, keys keyMap, pool *connPool) (catalogTr
 		return t, t.filterInput.Focus()
 	case key.Matches(k, keys.Expand):
 		return t.activate(pool)
+	case key.Matches(k, keys.TreeLeft):
+		return t.collapseOrParent(), nil
+	case key.Matches(k, keys.TreeRight):
+		return t.expandOrChild(pool)
 	case key.Matches(k, keys.Refresh):
 		return t.refresh(pool)
 	case key.Matches(k, keys.Disconnect):
@@ -284,6 +288,49 @@ func (t catalogTree) activate(pool *connPool) (catalogTree, tea.Cmd) {
 		n.loading = true
 		return t, loadCmd(t.work, pool, n, false)
 	}
+}
+
+// collapseOrParent collapses the selected node when it is expanded, and
+// otherwise moves the selection to its parent; on a collapsed root it does
+// nothing.
+func (t catalogTree) collapseOrParent() catalogTree {
+	n := t.selectedNode()
+	if n == nil {
+		return t
+	}
+	if n.kind.expandable() && n.expanded {
+		n.expanded = false
+		return t
+	}
+	if n.parent == nil {
+		return t
+	}
+	for i, r := range t.visible() {
+		if r == n.parent {
+			t.selected = i
+			break
+		}
+	}
+	return t
+}
+
+// expandOrChild expands the selected node (fetching its Catalog level the
+// first time, like activate) when it is collapsed, and otherwise moves the
+// selection to its first visible child. It does nothing on a leaf or a
+// load-more row.
+func (t catalogTree) expandOrChild(pool *connPool) (catalogTree, tea.Cmd) {
+	n := t.selectedNode()
+	if n == nil || n.loading || !n.kind.expandable() {
+		return t, nil
+	}
+	if !n.expanded {
+		return t.activate(pool)
+	}
+	rows := t.visible()
+	if i := clampedSelected(t.selected, rows); i+1 < len(rows) && rows[i+1].parent == n {
+		t.selected = i + 1
+	}
+	return t, nil
 }
 
 // refresh re-fetches the selected node's level from scratch. On a Profile

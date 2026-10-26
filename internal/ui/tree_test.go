@@ -471,3 +471,61 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+func leftKey() tea.KeyPressMsg  { return tea.KeyPressMsg{Code: tea.KeyLeft} }
+func rightKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyRight} }
+
+func TestArrowKeysExpandCollapseAndWalkTheTree(t *testing.T) {
+	tr := newTestTree()
+	root := tr.roots[0]
+	root.loaded = true
+	db := &node{kind: kindDatabase, name: "hqdb", parent: root, loaded: true}
+	col := &node{kind: kindColumn, name: "id", parent: db}
+	db.children = []*node{col}
+	root.children = []*node{db}
+	pool, calls := fakePool()
+	keys := defaultKeyMap()
+
+	steps := []struct {
+		key          tea.KeyPressMsg
+		wantSelected string
+		wantRoot     bool
+		wantDB       bool
+	}{
+		{rightKey(), "alpha", true, false}, // expand root
+		{rightKey(), "hqdb", true, false},  // step into first child
+		{rightKey(), "hqdb", true, true},   // expand database
+		{rightKey(), "id", true, true},     // step into column
+		{rightKey(), "id", true, true},     // leaf: no-op
+		{leftKey(), "hqdb", true, true},    // leaf: step to parent
+		{leftKey(), "hqdb", true, false},   // collapse database
+		{leftKey(), "alpha", true, false},  // step to parent
+		{leftKey(), "alpha", false, false}, // collapse root
+		{leftKey(), "alpha", false, false}, // collapsed root: no-op
+	}
+	for i, s := range steps {
+		var cmd tea.Cmd
+		tr, cmd = tr.Update(s.key, keys, pool)
+		if cmd != nil {
+			t.Fatalf("step %d: cached levels must not re-fetch", i)
+		}
+		if got := tr.selectedNode().name; got != s.wantSelected {
+			t.Errorf("step %d: selected %q, want %q", i, got, s.wantSelected)
+		}
+		if root.expanded != s.wantRoot || db.expanded != s.wantDB {
+			t.Errorf("step %d: expanded root=%v db=%v, want %v %v", i, root.expanded, db.expanded, s.wantRoot, s.wantDB)
+		}
+	}
+	if *calls != 0 {
+		t.Errorf("opener called %d times, want 0", *calls)
+	}
+}
+
+func TestRightArrowLoadsAnUnloadedNode(t *testing.T) {
+	tr := newTestTree()
+	pool, _ := fakePool()
+	tr, cmd := tr.Update(rightKey(), defaultKeyMap(), pool)
+	if cmd == nil || !tr.roots[0].loading {
+		t.Fatal("right on an unloaded Profile must start loading it")
+	}
+}

@@ -22,6 +22,13 @@ type keyMap struct {
 	// Expand toggles a node open or closed, fetching its Catalog level the
 	// first time; it is also what a confirmed double-click runs.
 	Expand key.Binding
+	// TreeLeft collapses the selected node, or moves the selection to its
+	// parent when it is already collapsed; TreeRight expands the selected
+	// node, or moves the selection to its first child when it is already
+	// expanded. They share keys with Left and Right, which only act when a
+	// grid has focus.
+	TreeLeft  key.Binding
+	TreeRight key.Binding
 	// Refresh re-fetches the selected node's children from the server, or
 	// retries the connection when the selected node is a broken Profile.
 	Refresh key.Binding
@@ -109,6 +116,8 @@ func defaultKeyMap() keyMap {
 		Up:         key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "select up")),
 		Down:       key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "select down")),
 		Expand:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "expand/collapse")),
+		TreeLeft:   key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "collapse/parent")),
+		TreeRight:  key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "expand/child")),
 		Refresh:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh/reconnect")),
 		Disconnect: key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "disconnect profile")),
 
@@ -161,7 +170,7 @@ func (k keyMap) globalHelp() []key.Binding {
 // treeHelp lists the tree pane's own bindings, shown in the status bar and
 // the help overlay while the tree is focused.
 func (k keyMap) treeHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Expand, k.Refresh, k.Disconnect, k.Filter}
+	return []key.Binding{k.Up, k.Down, k.Expand, k.TreeLeft, k.TreeRight, k.Refresh, k.Disconnect, k.Filter}
 }
 
 // dataViewHelp lists a SQL Data view tab's own bindings, shown in the

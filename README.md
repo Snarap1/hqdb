@@ -121,6 +121,7 @@ Single-letter keys work only when focus is not in a text field; `Esc` leaves a t
 | global | `Ctrl+C` | cancel the running work in the focused pane (never quits) |
 | tree | `Up`/`k`, `Down`/`j` | move the selection |
 | tree | `Enter` / double-click | expand, or open the Data view on a Table |
+| tree | `Right`/`l`, `Left`/`h` | expand or step into the first child; collapse or step to the parent |
 | tree | `d` | DDL of the Table |
 | tree | `c` | Console of the Profile |
 | tree | `r` | refresh the node or reconnect the Profile |
