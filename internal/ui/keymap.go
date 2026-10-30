@@ -103,6 +103,15 @@ type keyMap struct {
 	// key, so ctrl+up / ctrl+down, which plain editing does not use.
 	HistoryPrev key.Binding
 	HistoryNext key.Binding
+	// NewLineBelow, WordLeft, and WordRight are hints for editor keys that
+	// editor.update handles itself (it also takes ctrl+backspace/delete,
+	// ctrl+home/end, ctrl+u, and ctrl+k).
+	NewLineBelow key.Binding
+	WordLeft     key.Binding
+	WordRight    key.Binding
+	MoveLineUp   key.Binding
+	MoveLineDown key.Binding
+	DupLine      key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -151,6 +160,12 @@ func defaultKeyMap() keyMap {
 		EditBuffer:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "edit")),
 		HistoryPrev:  key.NewBinding(key.WithKeys("ctrl+up"), key.WithHelp("ctrl+up", "older statement")),
 		HistoryNext:  key.NewBinding(key.WithKeys("ctrl+down"), key.WithHelp("ctrl+down", "newer statement")),
+		NewLineBelow: key.NewBinding(key.WithKeys("shift+enter"), key.WithHelp("shift+enter", "new line below")),
+		WordLeft:     key.NewBinding(key.WithKeys("ctrl+left"), key.WithHelp("ctrl+←", "word left")),
+		WordRight:    key.NewBinding(key.WithKeys("ctrl+right"), key.WithHelp("ctrl+→", "word right")),
+		MoveLineUp:   key.NewBinding(key.WithKeys("alt+up"), key.WithHelp("alt+↑", "move line up")),
+		MoveLineDown: key.NewBinding(key.WithKeys("alt+down"), key.WithHelp("alt+↓", "move line down")),
+		DupLine:      key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "duplicate line")),
 	}
 }
 

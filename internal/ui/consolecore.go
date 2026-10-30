@@ -178,7 +178,7 @@ func (c *consoleCore) clickEditor(y, height int) (top int, ok bool) {
 // editorHelp is the help while the editor has focus; the rest of a
 // Console's help starts with resultsHelpHead.
 func (c *consoleCore) editorHelp(keys keyMap) []key.Binding {
-	return []key.Binding{keys.RunStatement, keys.HistoryPrev, keys.HistoryNext}
+	return []key.Binding{keys.RunStatement, keys.NewLineBelow, keys.WordLeft, keys.WordRight, keys.MoveLineUp, keys.MoveLineDown, keys.DupLine, keys.HistoryPrev, keys.HistoryNext}
 }
 
 func (c *consoleCore) resultsHelpHead(keys keyMap) []key.Binding {

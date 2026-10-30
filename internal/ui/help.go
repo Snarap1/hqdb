@@ -24,7 +24,7 @@ func helpGroups(k keyMap) []helpGroup {
 		{"TABS", []key.Binding{k.PrevTab, k.NextTab, k.CloseTab}},
 		{"DATA VIEW", []key.Binding{k.NextPage, k.PrevPage, k.PageSize, k.Count, k.Where, k.OrderBy, k.Export, k.ToggleView}},
 		{"GRID", []key.Binding{k.Up, k.Down, k.Left, k.Right, k.CellPopup, k.Copy, k.CopyRow, k.Search, k.SearchNext, k.SearchPrev}},
-		{"CONSOLE", []key.Binding{k.RunStatement, esc("leave editor"), k.EditBuffer, k.HistoryPrev, k.HistoryNext}},
+		{"CONSOLE", []key.Binding{k.RunStatement, esc("leave editor"), k.EditBuffer, k.NewLineBelow, k.WordLeft, k.WordRight, k.MoveLineUp, k.MoveLineDown, k.DupLine, k.HistoryPrev, k.HistoryNext}},
 	}
 }
 
