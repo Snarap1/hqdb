@@ -81,8 +81,38 @@ func TestMongoConsoleRunsShellCommandsUseAndConfirmsWrites(t *testing.T) {
 	})
 
 	// Unsupported constructs name the supported subset.
-	runInConsole(tm, "db."+name+".insertOne({a: 1})")
+	runInConsole(tm, "db."+name+".replaceOne({}, {a: 1})")
 	waitForPlain(t, tm, "is not supported; supported:")
+
+	// Writes prompt first; n does not run them, y does.
+	insert := "db." + outName + ".insertOne({_id: 1, a: 1})"
+	runInConsole(tm, insert)
+	waitForPlain(t, tm, "This will write to mongo-dev:")
+	tm.Send(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	waitForPlain(t, tm, "Cancelled")
+	runInConsole(tm, "db."+outName+".countDocuments()")
+	waitForPlain(t, tm, "count: 0")
+	runInConsole(tm, insert)
+	confirmWrite(t, tm)
+	waitForPlain(t, tm, "insertOne: 1 inserted")
+	runInConsole(tm, "db."+outName+".insertMany([{_id: 2}, {_id: 3}])")
+	confirmWrite(t, tm)
+	waitForPlain(t, tm, "insertMany: 2 inserted")
+	runInConsole(tm, "db."+outName+".updateOne({_id: 1}, {$set: {a: 2}})")
+	confirmWrite(t, tm)
+	waitForPlain(t, tm, "updateOne: 1 matched, 1 modified")
+	runInConsole(tm, "db."+outName+".updateOne({_id: 2}, [{$set: {a: 2}}])")
+	confirmWrite(t, tm)
+	waitForPlain(t, tm, "updateOne: 1 matched, 1 modified")
+	runInConsole(tm, "db."+outName+".countDocuments({a: 2})")
+	waitForPlain(t, tm, "count: 2")
+	for _, id := range []string{"1", "2", "3"} {
+		runInConsole(tm, "db."+outName+".deleteOne({_id: "+id+"})")
+		confirmWrite(t, tm)
+		waitForPlain(t, tm, "deleteOne: 1 deleted")
+		runInConsole(tm, "db."+outName+".countDocuments({_id: "+id+"})")
+		waitForPlain(t, tm, "count: 0")
+	}
 
 	// An aggregation with $out prompts; n does not run it, y does.
 	out := "db." + name + ".aggregate([{$match: {}}, {$out: '" + outName + "'}])"

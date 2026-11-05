@@ -14,7 +14,9 @@ import (
 // supported" error ends with it.
 const Supported = "db.<coll>.find(filter, projection) with .sort(...), .limit(...), .skip(...); " +
 	"db.<coll>.aggregate([...]); db.<coll>.countDocuments(filter); " +
-	"db.<coll>.distinct('field', filter); use <db>"
+	"db.<coll>.distinct('field', filter); db.<coll>.insertOne(document); " +
+	"db.<coll>.insertMany([...]); db.<coll>.updateOne(filter, update); " +
+	"db.<coll>.deleteOne(filter); use <db>"
 
 // Command is one parsed mongosh statement: either a Database switch (Use
 // is set) or a Request for mongocmd.Run. Request.Database is left empty
@@ -31,8 +33,8 @@ func unsupported(what string) error {
 // ParseCommand parses one mongosh statement of the supported subset into a
 // Command. Filter, projection, sort, and pipeline arguments are mongo shell
 // literals, translated to compact Extended JSON (key order kept). It never
-// screens what it parses: an aggregate with a writing stage parses fine
-// (ADR-0003), and the caller decides what to do with it.
+// screens what it parses: a write parses fine (ADR-0003), and the caller
+// decides what to do with it.
 func ParseCommand(src string) (Command, error) {
 	s := strings.TrimSpace(src)
 	s = strings.TrimSpace(strings.TrimSuffix(s, ";"))
@@ -106,6 +108,40 @@ func ParseCommand(src string) (Command, error) {
 			if req.Filter, err = document("filter", args[1]); err != nil {
 				return Command{}, err
 			}
+		}
+	case "insertOne":
+		req.Operation = "insertOne"
+		if len(args) != 1 {
+			return Command{}, errors.New("insertOne takes one document: insertOne(document)")
+		}
+		if req.Document, err = document("document", args[0]); err != nil {
+			return Command{}, err
+		}
+	case "insertMany":
+		req.Operation = "insertMany"
+		if len(args) != 1 || !bytes.HasPrefix(args[0], []byte("[")) {
+			return Command{}, errors.New("insertMany takes one array of documents: insertMany([...])")
+		}
+		req.Documents = string(args[0])
+	case "updateOne":
+		req.Operation = "updateOne"
+		if len(args) != 2 {
+			return Command{}, errors.New("updateOne takes a filter and an update: updateOne(filter, update)")
+		}
+		if req.Filter, err = document("filter", args[0]); err != nil {
+			return Command{}, err
+		}
+		if !bytes.HasPrefix(args[1], []byte("{")) && !bytes.HasPrefix(args[1], []byte("[")) {
+			return Command{}, errors.New("update must be a document or a pipeline array")
+		}
+		req.Update = string(args[1])
+	case "deleteOne":
+		req.Operation = "deleteOne"
+		if len(args) != 1 {
+			return Command{}, errors.New("deleteOne takes one filter: deleteOne(filter)")
+		}
+		if req.Filter, err = document("filter", args[0]); err != nil {
+			return Command{}, err
 		}
 	default:
 		return Command{}, unsupported(fmt.Sprintf("%q", head.name))

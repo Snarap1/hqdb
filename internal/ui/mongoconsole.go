@@ -20,9 +20,9 @@ import (
 // Ctrl+C cancellation), but its statements are the mongosh subset
 // mongoshell.ParseCommand accepts, run through mongocmd.RunOrdered on the
 // Profile's shared connection, with Documents shown as the Data view's
-// cards (or grid). An aggregation with a writing stage
-// (mongocmd.PipelineViolation) is refused on a read-only Profile and asks
-// first on a read-write one (ADR-0003).
+// cards (or grid). A writing operation (mongocmd.OperationViolation) or an
+// aggregation with a writing stage (mongocmd.PipelineViolation) is refused
+// on a read-only Profile and asks first on a read-write one (ADR-0003).
 type mongoConsoleTab struct {
 	consoleCore
 	// database is the Database statements run against: the one the
@@ -63,6 +63,11 @@ func applyMongoConsoleMsg(msg mongoConsoleMsg) {
 		return
 	}
 	took := formatDuration(msg.took)
+	if msg.res.Summary != "" {
+		t.showDocs(msg.res.Documents, 0)
+		t.status = fmt.Sprintf("%s: %s in %s", msg.op, msg.res.Summary, took)
+		return
+	}
 	switch msg.op {
 	case "count":
 		t.hasDocs = false
@@ -118,11 +123,11 @@ func (t *mongoConsoleTab) runCmd(pool *connPool) tea.Cmd {
 	return t.runOrAsk(stmt, mongoViolation(req), func() tea.Cmd { return t.execCmd(pool, stmt, req) })
 }
 
-// mongoViolation is the writing stage of an aggregation that the MCP
-// server would refuse, or "" for anything else.
+// mongoViolation is the writing operation or aggregation stage that the
+// MCP server would refuse, or "" for anything else.
 func mongoViolation(req mongocmd.Request) string {
 	if req.Operation != "aggregate" {
-		return ""
+		return mongocmd.OperationViolation(req.Operation)
 	}
 	p, err := mongocmd.ParsePipeline(req.Pipeline)
 	if err != nil {

@@ -378,9 +378,13 @@ Refused by omission: every write (`set`, `del`, `expire`, `mset`, `setnx`, `gets
 Inline arguments in `command` are split on whitespace, so quoting is not honoured: `GET "user:1000"` looks up a key that includes literal quote characters.
 Put arguments with spaces in the `args` array, which is passed through verbatim.
 
-`run_mongo` runs exactly one of four operations, so nothing else reaches the server: `find` (with `filter`, `projection`, `sort`), `aggregate` (with `pipeline`), `count` (with `filter`), and `distinct` (with `field` and `filter`).
-Any other `operation` is refused with `operation "<op>" is not supported; supported: find, aggregate, count, distinct`.
-`filter`, `projection`, `sort`, and `pipeline` are MongoDB Extended JSON strings, so `{"$oid": "..."}` and `{"$date": "..."}` reach the server as real ObjectIDs and dates, and the key order of `sort` is kept.
+`run_mongo` runs exactly one of eight operations, so nothing else reaches the server: `find` (with `filter`, `projection`, `sort`), `aggregate` (with `pipeline`), `count` (with `filter`), `distinct` (with `field` and `filter`), `insertOne` (with `document`), `insertMany` (with `documents`), `updateOne` (with `filter` and `update`), and `deleteOne` (with `filter`).
+Any other `operation` is refused with `operation "<op>" is not supported; supported: find, aggregate, count, distinct, insertOne, insertMany, updateOne, deleteOne`.
+`filter`, `projection`, `sort`, `pipeline`, `document`, `documents`, and `update` are MongoDB Extended JSON strings, so `{"$oid": "..."}` and `{"$date": "..."}` reach the server as real ObjectIDs and dates, and the key order of `sort` is kept.
+The writing operations are refused with `Refused (read-only profile): operation "insertOne" writes data; this server permits reads only`.
+On a read-write profile they return one summary document: `insertedId`, `insertedCount` and `insertedIds`, `matchedCount` and `modifiedCount`, or `deletedCount`.
+`updateOne` and `deleteOne` require `filter`; pass `{}` to match any document.
+`update` is an update document or an update pipeline array; upserts and other options are not supported.
 The aggregation stages `$out` and `$merge` are refused wherever they appear, including inside `$facet`, `$lookup`, and `$unionWith` sub-pipelines, with `Refused (read-only profile): aggregation stage "$out" writes data; this server permits reads only`.
 `limit` defaults to 50 documents; `truncated` says more were available.
 Results come back as relaxed Extended JSON: ObjectIDs as `{"$oid": ...}`, dates as `{"$date": ...}`, plain numbers as numbers.

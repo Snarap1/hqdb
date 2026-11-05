@@ -43,7 +43,8 @@ func startE2E(t *testing.T) *e2eSession {
 	if err != nil {
 		t.Fatalf("read fixtures.toml: %v", err)
 	}
-	// pg-rw is pg-dev with read-write access: the same database, unscreened.
+	// pg-rw and mongo-rw are pg-dev and mongo-dev with read-write access:
+	// the same databases, unscreened.
 	cfg = append(cfg, []byte(`
 [profiles.pg-rw]
 adapter = "postgres"
@@ -53,6 +54,16 @@ port = 55432
 user = "hq"
 password = "hq"
 dbname = "hqdb"
+
+[profiles.mongo-rw]
+adapter = "mongodb"
+access = "read-write"
+host = "127.0.0.1"
+port = 57017
+user = "hq"
+password = "hq"
+auth_source = "admin"
+database = "hqdb"
 `)...)
 	cfgPath := filepath.Join(dir, "hqdb.toml")
 	if err := os.WriteFile(cfgPath, cfg, 0o600); err != nil {
@@ -606,6 +617,50 @@ func TestE2ERunMongo(t *testing.T) {
 	})
 	if !strings.Contains(msg, `Refused (read-only profile): aggregation stage "$out" writes data`) {
 		t.Errorf("$out refusal = %q", msg)
+	}
+}
+
+// TestE2ERunMongoWrites refuses each writing operation on the read-only
+// mongo-dev and runs it on the read-write mongo-rw, against a collection
+// the test leaves empty.
+func TestE2ERunMongoWrites(t *testing.T) {
+	s := startE2E(t)
+	coll := fmt.Sprintf("mcp_writes_%d", time.Now().UnixNano())
+	writes := []struct {
+		args       map[string]any
+		wantOp     string
+		wantCount  int64
+		wantKey    string
+		wantResult any
+	}{
+		{map[string]any{"operation": "insertOne", "document": `{"_id": 1, "a": 1}`}, "insertOne", 1, "insertedId", 1.0},
+		{map[string]any{"operation": "insertMany", "documents": `[{"_id": 2}, {"_id": 3}]`}, "insertMany", 2, "insertedCount", 2.0},
+		{map[string]any{"operation": "updateOne", "filter": `{"_id": 1}`, "update": `{"$set": {"a": 2}}`}, "updateOne", 1, "modifiedCount", 1.0},
+		{map[string]any{"operation": "updateOne", "filter": `{"_id": 2}`, "update": `[{"$set": {"a": 2}}]`}, "updateOne", 1, "modifiedCount", 1.0},
+		{map[string]any{"operation": "deleteOne", "filter": `{"_id": 1}`}, "deleteOne", 1, "deletedCount", 1.0},
+		{map[string]any{"operation": "deleteOne", "filter": `{"_id": 2}`}, "deleteOne", 1, "deletedCount", 1.0},
+		{map[string]any{"operation": "deleteOne", "filter": `{"_id": 3}`}, "deleteOne", 1, "deletedCount", 1.0},
+	}
+	for _, w := range writes {
+		w.args["collection"] = coll
+		w.args["profile"] = "mongo-dev"
+		msg := s.errText("run_mongo", w.args)
+		want := fmt.Sprintf("Refused (read-only profile): operation %q writes data; this server permits reads only", w.wantOp)
+		if msg != want {
+			t.Errorf("%s on mongo-dev = %q, want %q", w.wantOp, msg, want)
+		}
+		w.args["profile"] = "mongo-rw"
+		var out server.RunMongoOut
+		s.ok("run_mongo", w.args, &out)
+		if out.Operation != w.wantOp || out.Count != w.wantCount || len(out.Documents) != 1 {
+			t.Fatalf("%s = %+v", w.wantOp, out)
+		}
+		if doc, _ := out.Documents[0].(map[string]any); doc[w.wantKey] != w.wantResult {
+			t.Errorf("%s summary = %v, want %s = %v", w.wantOp, out.Documents[0], w.wantKey, w.wantResult)
+		}
+	}
+	if msg := s.errText("run_mongo", map[string]any{"profile": "mongo-rw", "collection": coll, "operation": "deleteOne"}); !strings.Contains(msg, "deleteOne requires filter") {
+		t.Errorf("deleteOne without filter = %q", msg)
 	}
 }
 

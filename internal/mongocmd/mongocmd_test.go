@@ -1,6 +1,7 @@
 package mongocmd
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +10,88 @@ import (
 
 	"github.com/Snarap1/hqdb/internal/values"
 )
+
+func TestNormalizeOperation(t *testing.T) {
+	cases := map[string]string{
+		"":            "find",
+		" Find ":      "find",
+		"aggregate":   "aggregate",
+		"insertOne":   "insertOne",
+		"INSERTMANY":  "insertMany",
+		" updateone ": "updateOne",
+		"deleteone":   "deleteOne",
+		"replaceOne":  "replaceone",
+	}
+	for op, want := range cases {
+		if got := NormalizeOperation(op); got != want {
+			t.Errorf("NormalizeOperation(%q) = %q, want %q", op, got, want)
+		}
+	}
+}
+
+func TestOperationViolation(t *testing.T) {
+	cases := map[string]string{
+		"":           "",
+		"find":       "",
+		"aggregate":  "",
+		"count":      "",
+		"distinct":   "",
+		"insertOne":  `operation "insertOne" writes data; this server permits reads only`,
+		"insertmany": `operation "insertMany" writes data; this server permits reads only`,
+		" UPDATEONE": `operation "updateOne" writes data; this server permits reads only`,
+		"deleteOne":  `operation "deleteOne" writes data; this server permits reads only`,
+	}
+	for op, want := range cases {
+		if got := OperationViolation(op); got != want {
+			t.Errorf("OperationViolation(%q) = %q, want %q", op, got, want)
+		}
+	}
+}
+
+// Invalid write arguments fail before anything reaches a collection, so
+// a nil collection is enough here.
+func TestWriteRejectsInvalidArguments(t *testing.T) {
+	cases := []struct {
+		name    string
+		req     Request
+		wantErr string
+	}{
+		{"insertOne without document", Request{Operation: "insertOne"}, "insertOne requires document"},
+		{"insertOne not an object", Request{Operation: "insertOne", Document: "1"}, "document must be a JSON object"},
+		{"insertMany without documents", Request{Operation: "insertMany"}, "insertMany requires documents"},
+		{"insertMany not an array", Request{Operation: "insertMany", Documents: `{"a": 1}`}, "documents must be a JSON array of objects"},
+		{"insertMany empty", Request{Operation: "insertMany", Documents: "[]"}, "insertMany requires at least one document"},
+		{"updateOne without filter", Request{Operation: "updateOne", Update: `{"$set": {"a": 1}}`}, "updateOne requires filter; pass {} to match any document"},
+		{"updateOne without update", Request{Operation: "updateOne", Filter: "{}"}, "updateOne requires update"},
+		{"updateOne bad pipeline", Request{Operation: "updateOne", Filter: "{}", Update: "[1]"}, "pipeline must be a JSON array of stage objects"},
+		{"deleteOne without filter", Request{Operation: "deleteOne"}, "deleteOne requires filter; pass {} to match any document"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := write(context.Background(), nil, c.req.Operation, nil, c.req, JSON)
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("write error = %v, want it to contain %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseUpdate(t *testing.T) {
+	doc, err := parseUpdate(`{"$set": {"a": 1}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc.(bson.D); !ok {
+		t.Errorf("update document parsed as %T, want bson.D", doc)
+	}
+	pipeline, err := parseUpdate(` [{"$set": {"a": 1}}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := pipeline.(bson.A); !ok || len(p) != 1 {
+		t.Errorf("update pipeline parsed as %#v, want one stage", pipeline)
+	}
+}
 
 func TestOrderedJSONKeepsServerFieldOrder(t *testing.T) {
 	oid, _ := bson.ObjectIDFromHex("65a1b2c3d4e5f60718293a4b")

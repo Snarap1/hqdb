@@ -1,7 +1,7 @@
-// Package mongocmd runs one of four MongoDB operations: find, aggregate,
-// count, or distinct. It does not screen an aggregate pipeline for write
-// stages itself; the MCP layer screens before calling Run, using
-// ParsePipeline and PipelineViolation (ADR-0003).
+// Package mongocmd runs one MongoDB operation: find, aggregate, count,
+// distinct, insertOne, insertMany, updateOne, or deleteOne. It does not
+// screen anything itself; the front ends screen before calling Run, using
+// OperationViolation, ParsePipeline, and PipelineViolation (ADR-0003).
 package mongocmd
 
 import (
@@ -20,7 +20,16 @@ import (
 
 // Operations is every operation run_mongo accepts, in the order used by
 // error messages.
-const Operations = "find, aggregate, count, distinct"
+const Operations = "find, aggregate, count, distinct, insertOne, insertMany, updateOne, deleteOne"
+
+// writeOperations maps each writing operation's lowercase form to its
+// canonical spelling.
+var writeOperations = map[string]string{
+	"insertone":  "insertOne",
+	"insertmany": "insertMany",
+	"updateone":  "updateOne",
+	"deleteone":  "deleteOne",
+}
 
 // writeStages are the aggregation stages that write to a collection. They
 // are refused wherever they appear, including inside $facet, $lookup, and
@@ -29,7 +38,9 @@ var writeStages = map[string]bool{"$out": true, "$merge": true}
 
 // Request is one run_mongo call. Filter, Projection, Sort, and Pipeline are
 // MongoDB Extended JSON strings, so key order (which matters for sort) and
-// typed values such as {"$oid": "..."} or {"$date": "..."} survive.
+// typed values such as {"$oid": "..."} or {"$date": "..."} survive. So are
+// Document (insertOne), Documents (insertMany, an array), and Update
+// (updateOne, a document or a pipeline array).
 type Request struct {
 	Database   string
 	Collection string
@@ -39,6 +50,9 @@ type Request struct {
 	Sort       string
 	Pipeline   string
 	Field      string
+	Document   string
+	Documents  string
+	Update     string
 	Limit      int
 	// Skip skips that many find results first (paging); the MCP tool never sets it.
 	Skip int
@@ -46,11 +60,37 @@ type Request struct {
 
 // Result is the JSON-safe outcome of one operation. Documents holds find and
 // aggregate documents or distinct values; Count holds the count result or the
-// number of returned documents.
+// number of returned documents. A write holds one summary document in
+// Documents, the number of documents it affected in Count, and the same
+// outcome as text in Summary.
 type Result struct {
 	Documents []any
 	Count     int64
 	Truncated bool
+	Summary   string
+}
+
+// NormalizeOperation returns op's canonical spelling: operation names are
+// case-insensitive and "" means find.
+func NormalizeOperation(op string) string {
+	s := strings.ToLower(strings.TrimSpace(op))
+	if s == "" {
+		return "find"
+	}
+	if canonical, ok := writeOperations[s]; ok {
+		return canonical
+	}
+	return s
+}
+
+// OperationViolation returns a reason the operation is refused, or "" if
+// it does not write by itself. An aggregate can still write through its
+// pipeline; PipelineViolation screens that.
+func OperationViolation(op string) string {
+	if canonical, ok := writeOperations[strings.ToLower(strings.TrimSpace(op))]; ok {
+		return fmt.Sprintf("operation %q writes data; this server permits reads only", canonical)
+	}
+	return ""
 }
 
 // PipelineViolation returns a reason the pipeline is refused, or "" if it
@@ -107,18 +147,45 @@ func parsePipeline(s string) (bson.A, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, fmt.Errorf("aggregate requires pipeline")
 	}
-	// UnmarshalExtJSON only decodes documents, so wrap the array in one.
-	var wrapper struct {
-		Pipeline []bson.D `bson:"p"`
-	}
-	if err := bson.UnmarshalExtJSON([]byte(`{"p":`+s+`}`), false, &wrapper); err != nil {
+	stages, err := parseDocArray(s)
+	if err != nil {
 		return nil, fmt.Errorf("pipeline must be a JSON array of stage objects: %v", err)
 	}
-	out := make(bson.A, len(wrapper.Pipeline))
-	for i, d := range wrapper.Pipeline {
+	return stages, nil
+}
+
+// parseDocArray parses an Extended JSON array of objects.
+func parseDocArray(s string) (bson.A, error) {
+	// UnmarshalExtJSON only decodes documents, so wrap the array in one.
+	var wrapper struct {
+		Items []bson.D `bson:"p"`
+	}
+	if err := bson.UnmarshalExtJSON([]byte(`{"p":`+s+`}`), false, &wrapper); err != nil {
+		return nil, err
+	}
+	out := make(bson.A, len(wrapper.Items))
+	for i, d := range wrapper.Items {
 		out[i] = d
 	}
 	return out, nil
+}
+
+// requireDoc parses a document argument op cannot go without. An explicit
+// {} is accepted; a missing one is an error, so an omitted filter never
+// reaches a write as "any document".
+func requireDoc(op, name, s string) (bson.D, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, fmt.Errorf("%s requires %s", op, name)
+	}
+	return parseDoc(name, s)
+}
+
+// parseUpdate parses an update document or an update pipeline.
+func parseUpdate(s string) (any, error) {
+	if strings.HasPrefix(strings.TrimSpace(s), "[") {
+		return parsePipeline(s)
+	}
+	return requireDoc("updateOne", "update", s)
 }
 
 // JSON converts a BSON value into a JSON-safe value via relaxed Extended
@@ -159,9 +226,9 @@ func OrderedJSON(v any) (any, error) {
 // OrderedJSON).
 type converter func(any) (any, error)
 
-// Run executes one of the four operations against the request's collection.
-// Limit bounds find, aggregate, and distinct results; 0 means unlimited. The
-// caller is responsible for screening an aggregate pipeline first.
+// Run executes one operation against the request's collection. Limit bounds
+// find, aggregate, and distinct results; 0 means unlimited. The caller is
+// responsible for screening the operation and an aggregate pipeline first.
 func Run(ctx context.Context, c *adapters.Mongo, req Request) (*Result, error) {
 	return run(ctx, c, req, JSON)
 }
@@ -247,9 +314,11 @@ func run(ctx context.Context, c *adapters.Mongo, req Request, conv converter) (*
 	if err != nil {
 		return nil, err
 	}
-	switch strings.ToLower(strings.TrimSpace(req.Operation)) {
-	case "find", "":
+	switch op := NormalizeOperation(req.Operation); op {
+	case "find":
 		return find(ctx, coll, filter, req, conv)
+	case "insertOne", "insertMany", "updateOne", "deleteOne":
+		return write(ctx, coll, op, filter, req, conv)
 	case "aggregate":
 		pipeline, err := parsePipeline(req.Pipeline)
 		if err != nil {
@@ -291,6 +360,72 @@ func run(ctx context.Context, c *adapters.Mongo, req Request, conv converter) (*
 	default:
 		return nil, fmt.Errorf("operation %q is not supported; supported: %s", req.Operation, Operations)
 	}
+}
+
+// write runs one writing operation, unscreened, and reports its outcome
+// as a summary document.
+func write(ctx context.Context, coll *mongo.Collection, op string, filter bson.D, req Request, conv converter) (*Result, error) {
+	if (op == "updateOne" || op == "deleteOne") && strings.TrimSpace(req.Filter) == "" {
+		return nil, fmt.Errorf("%s requires filter; pass {} to match any document", op)
+	}
+	var (
+		summary bson.D
+		text    string
+		count   int64
+	)
+	switch op {
+	case "insertOne":
+		doc, err := requireDoc(op, "document", req.Document)
+		if err != nil {
+			return nil, err
+		}
+		res, err := coll.InsertOne(ctx, doc)
+		if err != nil {
+			return nil, err
+		}
+		count, text = 1, "1 inserted"
+		summary = bson.D{{Key: "insertedId", Value: res.InsertedID}}
+	case "insertMany":
+		if strings.TrimSpace(req.Documents) == "" {
+			return nil, fmt.Errorf("insertMany requires documents")
+		}
+		docs, err := parseDocArray(req.Documents)
+		if err != nil {
+			return nil, fmt.Errorf("documents must be a JSON array of objects: %v", err)
+		}
+		if len(docs) == 0 {
+			return nil, fmt.Errorf("insertMany requires at least one document")
+		}
+		res, err := coll.InsertMany(ctx, docs)
+		if err != nil {
+			return nil, err
+		}
+		count, text = int64(len(res.InsertedIDs)), fmt.Sprintf("%d inserted", len(res.InsertedIDs))
+		summary = bson.D{{Key: "insertedCount", Value: count}, {Key: "insertedIds", Value: bson.A(res.InsertedIDs)}}
+	case "updateOne":
+		update, err := parseUpdate(req.Update)
+		if err != nil {
+			return nil, err
+		}
+		res, err := coll.UpdateOne(ctx, filter, update)
+		if err != nil {
+			return nil, err
+		}
+		count, text = res.ModifiedCount, fmt.Sprintf("%d matched, %d modified", res.MatchedCount, res.ModifiedCount)
+		summary = bson.D{{Key: "matchedCount", Value: res.MatchedCount}, {Key: "modifiedCount", Value: res.ModifiedCount}}
+	case "deleteOne":
+		res, err := coll.DeleteOne(ctx, filter)
+		if err != nil {
+			return nil, err
+		}
+		count, text = res.DeletedCount, fmt.Sprintf("%d deleted", res.DeletedCount)
+		summary = bson.D{{Key: "deletedCount", Value: res.DeletedCount}}
+	}
+	doc, err := conv(summary)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Documents: []any{doc}, Count: count, Summary: text}, nil
 }
 
 func find(ctx context.Context, coll *mongo.Collection, filter bson.D, req Request, conv converter) (*Result, error) {

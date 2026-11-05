@@ -25,6 +25,11 @@ func TestParseCommand(t *testing.T) {
 		{"countDocuments", "db.orders.countDocuments({s: 'x'})", Command{Request: mongocmd.Request{Collection: "orders", Operation: "count", Filter: `{"s":"x"}`}}},
 		{"distinct", "db.orders.distinct('status')", Command{Request: mongocmd.Request{Collection: "orders", Operation: "distinct", Field: "status"}}},
 		{"distinct filter", `db.orders.distinct("status", {n: {$gt: 1}})`, Command{Request: mongocmd.Request{Collection: "orders", Operation: "distinct", Field: "status", Filter: `{"n":{"$gt":1}}`}}},
+		{"insertOne", "db.users.insertOne({a: 1, b: 'x'})", Command{Request: mongocmd.Request{Collection: "users", Operation: "insertOne", Document: `{"a":1,"b":"x"}`}}},
+		{"insertMany", "db.users.insertMany([{a: 1}, {a: 2}])", Command{Request: mongocmd.Request{Collection: "users", Operation: "insertMany", Documents: `[{"a":1},{"a":2}]`}}},
+		{"updateOne", "db.users.updateOne({a: 1}, {$set: {b: 2}})", Command{Request: mongocmd.Request{Collection: "users", Operation: "updateOne", Filter: `{"a":1}`, Update: `{"$set":{"b":2}}`}}},
+		{"updateOne pipeline", "db.users.updateOne({}, [{$set: {b: 2}}])", Command{Request: mongocmd.Request{Collection: "users", Operation: "updateOne", Filter: `{}`, Update: `[{"$set":{"b":2}}]`}}},
+		{"deleteOne", "db.users.deleteOne({a: 1})", Command{Request: mongocmd.Request{Collection: "users", Operation: "deleteOne", Filter: `{"a":1}`}}},
 		{"use", "use other_db", Command{Use: "other_db"}},
 		{"use semicolon", "  use other;", Command{Use: "other"}},
 	}
@@ -46,7 +51,18 @@ func TestParseCommandUnsupported(t *testing.T) {
 		name, src, wantErr string
 	}{
 		{"empty", "  ", "empty statement"},
-		{"insert", "db.users.insertOne({a: 1})", `"insertOne" is not supported`},
+		{"replaceOne", "db.users.replaceOne({}, {a: 1})", `"replaceOne" is not supported`},
+		{"modifier on insertOne", "db.o.insertOne({}).limit(1)", `".limit()" is not supported after insertOne`},
+		{"insertOne without document", "db.o.insertOne()", "insertOne takes one document"},
+		{"insertOne options", "db.o.insertOne({}, {w: 1})", "insertOne takes one document"},
+		{"insertOne not a document", "db.o.insertOne(1)", "document must be a document"},
+		{"insertMany not array", "db.o.insertMany({a: 1})", "insertMany takes one array of documents"},
+		{"updateOne without update", "db.o.updateOne({})", "updateOne takes a filter and an update"},
+		{"updateOne options", "db.o.updateOne({}, {$set: {a: 1}}, {upsert: true})", "updateOne takes a filter and an update"},
+		{"updateOne filter not document", "db.o.updateOne(1, {$set: {a: 1}})", "filter must be a document"},
+		{"updateOne update scalar", "db.o.updateOne({}, 1)", "update must be a document or a pipeline array"},
+		{"deleteOne without filter", "db.o.deleteOne()", "deleteOne takes one filter"},
+		{"deleteOne filter not document", "db.o.deleteOne(1)", "filter must be a document"},
 		{"not db", "show dbs", "not supported"},
 		{"js", "var x = 1", "not supported"},
 		{"modifier on aggregate", "db.o.aggregate([]).limit(1)", `".limit()" is not supported after aggregate`},
@@ -77,7 +93,7 @@ func TestParseCommandUnsupported(t *testing.T) {
 
 // Every "not supported" message names the supported subset.
 func TestUnsupportedNamesSupported(t *testing.T) {
-	for _, src := range []string{"show dbs", "db.u.insertOne({})", "db.u.find().pretty()"} {
+	for _, src := range []string{"show dbs", "db.u.replaceOne({})", "db.u.find().pretty()"} {
 		_, err := ParseCommand(src)
 		if err == nil || !strings.Contains(err.Error(), "supported: db.<coll>.find(filter, projection)") {
 			t.Fatalf("ParseCommand(%q) error = %v, want the supported list", src, err)

@@ -17,7 +17,7 @@ Dependency direction: `config` ← `adapters` ← {`catalog`, `ddl`, `rediscmd`,
 
 Screening lives at the front ends, never in the core:
 - The core execution functions (`query.Run`, `export.Query`, `rediscmd.Run`, `mongocmd.Run`, `console.Run`) run whatever they are given.
-- The detectors are `readonly.Violation` (SQL), `rediscmd.CommandViolation` (default-deny whitelist), and `mongocmd.PipelineViolation` (`$out`/`$merge`).
+- The detectors are `readonly.Violation` (SQL), `rediscmd.CommandViolation` (default-deny whitelist), `mongocmd.OperationViolation` (`insertOne`, `insertMany`, `updateOne`, `deleteOne`), and `mongocmd.PipelineViolation` (`$out`/`$merge`).
 - `internal/server` calls `screen(access, violation)`: refuse with `Refused (read-only profile): <reason>` on a read-only Profile, run unscreened on a read-write one.
 - `internal/ui` Consoles call `consoleCore.runOrAsk`: refuse a violation on a read-only Profile, otherwise ask before any write; the SQL Data view screens its typed WHERE/ORDER BY on a read-only Profile. `Model.bindAccess` hands each new tab its Profile's access.
 

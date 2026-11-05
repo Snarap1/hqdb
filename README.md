@@ -93,7 +93,7 @@ It exits non-zero on any failure, so it drops into CI too.
 
 The screening for SQL is defense in depth: the statement must start with `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, `DESCRIBE`, `DESC`, or `TABLE`, stacked statements are refused, and no write keyword (`insert`, `update`, `delete`, `drop`, `truncate`, `alter`, `create`, `call`, ...) may appear outside comments and strings.
 Redis is default-deny: allowlisted read commands only.
-MongoDB refuses the writing aggregation stages `$out` and `$merge`.
+MongoDB refuses the writing operations `insertOne`, `insertMany`, `updateOne`, and `deleteOne`, and the writing aggregation stages `$out` and `$merge`.
 The full lists are in [`docs/config-guide.md`](docs/config-guide.md#7-when-a-config-is-right-but-queries-fail).
 
 The access mode is not a security boundary: anyone who can edit the config can change it.
@@ -162,7 +162,7 @@ Connections are opened per tool call and closed afterwards, so it runs happily n
 | `get_ddl` | Returns a table's or view's definition, native where the server has one, reconstructed otherwise. |
 | `run_query` | Runs one SQL statement and returns rows as JSON; `database` picks a postgres Database. |
 | `run_redis` | Runs one Redis command. |
-| `run_mongo` | Runs `find`, `aggregate`, `count`, or `distinct`. |
+| `run_mongo` | Runs `find`, `aggregate`, `count`, `distinct`, `insertOne`, `insertMany`, `updateOne`, or `deleteOne`. |
 | `export_query` | Streams a query into a `csv`, `json`, or `ndjson` file; `database` picks a postgres Database. |
 
 `profile` is optional everywhere: omitting it uses `default_profile`.

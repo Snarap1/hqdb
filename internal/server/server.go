@@ -235,12 +235,15 @@ type runMongoIn struct {
 	Profile    string `json:"profile,omitempty" jsonschema:"profile name; omit to use default_profile"`
 	Database   string `json:"database,omitempty" jsonschema:"database name; omit to use the profile's database"`
 	Collection string `json:"collection" jsonschema:"collection (or view) name"`
-	Operation  string `json:"operation,omitempty" jsonschema:"find, aggregate, count, or distinct (default find)"`
+	Operation  string `json:"operation,omitempty" jsonschema:"find, aggregate, count, distinct, insertOne, insertMany, updateOne, or deleteOne (default find); the last four need a read-write profile"`
 	Filter     string `json:"filter,omitempty" jsonschema:"query filter as a MongoDB Extended JSON object, e.g. {\"status\": \"active\", \"_id\": {\"$oid\": \"...\"}}"`
 	Projection string `json:"projection,omitempty" jsonschema:"find projection as a JSON object, e.g. {\"name\": 1}"`
 	Sort       string `json:"sort,omitempty" jsonschema:"find sort as a JSON object, e.g. {\"created_at\": -1}"`
 	Pipeline   string `json:"pipeline,omitempty" jsonschema:"aggregate pipeline as a JSON array of stages; $out and $merge are refused"`
 	Field      string `json:"field,omitempty" jsonschema:"field name for distinct"`
+	Document   string `json:"document,omitempty" jsonschema:"insertOne document as a MongoDB Extended JSON object"`
+	Documents  string `json:"documents,omitempty" jsonschema:"insertMany documents as a JSON array of objects"`
+	Update     string `json:"update,omitempty" jsonschema:"updateOne update as a JSON object, e.g. {\"$set\": {\"status\": \"done\"}}, or a pipeline array"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"maximum documents to return; 0 means unlimited (default 50)"`
 }
 
@@ -262,9 +265,9 @@ func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) 
 	if !ok {
 		return nil, RunMongoOut{}, adapters.ErrNotSQL(conn.Kind(), "run_mongo")
 	}
-	op := strings.ToLower(strings.TrimSpace(in.Operation))
-	if op == "" {
-		op = "find"
+	op := mongocmd.NormalizeOperation(in.Operation)
+	if err := screen(access, mongocmd.OperationViolation(op)); err != nil {
+		return nil, RunMongoOut{}, err
 	}
 	if op == "aggregate" {
 		pipeline, err := mongocmd.ParsePipeline(in.Pipeline)
@@ -288,6 +291,9 @@ func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) 
 		Sort:       in.Sort,
 		Pipeline:   in.Pipeline,
 		Field:      in.Field,
+		Document:   in.Document,
+		Documents:  in.Documents,
+		Update:     in.Update,
 		Limit:      limit,
 	})
 	if err != nil {
@@ -390,11 +396,12 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "run_mongo",
-		Description: "Run one MongoDB read operation against a mongodb profile: find (filter, " +
-			"projection, sort), aggregate (pipeline), count (filter), or distinct (field, filter). " +
-			"Filters and pipelines are MongoDB Extended JSON strings, so {\"$oid\": ...} and " +
-			"{\"$date\": ...} work. Aggregation stages that write ($out, $merge) are refused on a " +
-			"read-only profile.",
+		Description: "Run one MongoDB operation against a mongodb profile: find (filter, " +
+			"projection, sort), aggregate (pipeline), count (filter), distinct (field, filter), " +
+			"insertOne (document), insertMany (documents), updateOne (filter, update), or deleteOne " +
+			"(filter). Filters, pipelines, documents, and updates are MongoDB Extended JSON strings, " +
+			"so {\"$oid\": ...} and {\"$date\": ...} work. The four writing operations and the " +
+			"aggregation stages that write ($out, $merge) are refused on a read-only profile.",
 	}, runMongoTool)
 
 	mcp.AddTool(server, &mcp.Tool{

@@ -9,7 +9,36 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Snarap1/hqdb/internal/config"
+	"github.com/Snarap1/hqdb/internal/mongoshell"
 )
+
+func TestMongoViolation(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"find", "db.c.find()", ""},
+		{"count", "db.c.countDocuments()", ""},
+		{"reading aggregate", "db.c.aggregate([{$match: {}}])", ""},
+		{"writing aggregate", "db.c.aggregate([{$out: 'x'}])", `aggregation stage "$out" writes data; this server permits reads only`},
+		{"insertOne", "db.c.insertOne({a: 1})", `operation "insertOne" writes data; this server permits reads only`},
+		{"insertMany", "db.c.insertMany([{a: 1}])", `operation "insertMany" writes data; this server permits reads only`},
+		{"updateOne", "db.c.updateOne({}, {$set: {a: 1}})", `operation "updateOne" writes data; this server permits reads only`},
+		{"deleteOne", "db.c.deleteOne({})", `operation "deleteOne" writes data; this server permits reads only`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd, err := mongoshell.ParseCommand(c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := mongoViolation(cmd.Request); got != c.want {
+				t.Errorf("mongoViolation(%q) = %q, want %q", c.src, got, c.want)
+			}
+		})
+	}
+}
 
 func TestConsoleAccess(t *testing.T) {
 	cases := []struct {
