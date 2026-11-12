@@ -13,6 +13,14 @@ _Avoid_: Connection, data source, DB (for this meaning)
 Whether a Profile is read-only (statements are screened and writes refused, the default) or read-write (statements run unscreened; the terminal UI asks before a write).
 _Avoid_: Permission, role, mode (alone)
 
+**Masked Profile**:
+A Profile with `mask = true`, whose values the MCP server replaces with Markers when they look like personal data; the terminal UI shows them in clear.
+_Avoid_: Anonymised profile, redacted profile
+
+**Marker**:
+The placeholder a masked value becomes: `masked-<12 hex>`, equal for equal values within one MCP session, or `masked-redacted` for special categories.
+_Avoid_: Hash (alone), token, mask (for the placeholder)
+
 **Adapter**:
 The database engine family a Profile speaks: postgres, mysql, mssql, odbc, clickhouse, redis, or mongodb.
 _Avoid_: Driver, dialect, engine
