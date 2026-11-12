@@ -48,9 +48,9 @@ A committed example should carry placeholders only.
 
 ## 2. The file shape
 
-Only two top-level keys are accepted: `default_profile` and `profiles`.
+Only three top-level keys are accepted: `default_profile`, `profiles`, and `masking` (section 8).
 Anything else, `keymaps` included, is rejected with
-`hqdb config files must only contain default_profile and profiles tables (got <key>)`.
+`hqdb config files must only contain default_profile, profiles, and masking tables (got <key>)`.
 
 ```toml
 default_profile = "local-pg"
@@ -109,11 +109,11 @@ Redis and MongoDB profiles may be new: they live in the same TOML file as the SQ
 
 Every key inside a profile must be valid for that adapter.
 A typo such as `hostname` fails with
-`unknown option "hostname" for adapter "postgres"; valid options: access, adapter, conn_str, database, dbname, host, password, port, sslmode, user`.
+`unknown option "hostname" for adapter "postgres"; valid options: access, adapter, conn_str, database, dbname, host, mask, password, port, sslmode, user`.
 
 `database` is an alias of `dbname` for `postgres`, `mysql`, and `mssql`; `dbname` wins when both are present.
 `conn_str` is accepted by every adapter except `redis`.
-`access` is accepted by every adapter (section 2).
+`access` and `mask` are accepted by every adapter (sections 2 and 8).
 
 | adapter | keys | defaults |
 | --- | --- | --- |
@@ -275,6 +275,7 @@ redis-dev  redis     read-only   FAIL  dial tcp 127.0.0.1:56379: connect: connec
 Exit status is 0 only when every selected profile passed, so it drops into CI or a pre-commit hook.
 A shape error (`unknown option ...`, a bad `access`) fails even with `--no-probe`; a connection error only shows when probing, which separates the two.
 A config that fails to load at all (`hqdb config files must only contain ...`, a missing `HQDB_CONFIG`) is reported before any profile, with exit status 1.
+A config with a `[masking]` table gets one more line after the profiles, `[masking]  -  -  ok`, or `FAIL` with the error (an unknown key, a malformed glob); a bad `mask` value fails its own profile's line.
 
 ## 6. Register with a client
 
@@ -397,11 +398,38 @@ postgres, mssql, and odbc reconstruct a table's definition from the system catal
 
 Cross-adapter guardrails: `run_query`/`export_query` on a redis profile return `<tool> is not available for redis; use run_redis`, and on a mongodb profile `<tool> is not available for mongodb; use run_mongo`; `run_redis`/`run_mongo` on another adapter return `<tool> is not available for <adapter>`; `get_columns`/`get_ddl` on a redis or mongodb profile return the same `<tool> is not available for <adapter>; use <adapter tool>` shape (`get_columns` on redis points at `get_schema`, `get_ddl` points at `run_redis`/`run_mongo`).
 
+## 8. Masking (MCP only)
+
+`mask = true` on a profile (default `false`, accepted by every adapter) makes `hqdb mcp` replace personal data with `masked-<12 hex>` markers; the terminal UI never masks.
+Set it on every profile that holds personal data and is reached by an agent, production first.
+What is masked, how markers work, which data is recognized, and the limits are in [`masking.md`](masking.md).
+
+```toml
+[profiles.prod]
+adapter = "postgres"
+host = "db.internal"
+dbname = "app"
+mask = true
+
+[masking]                                  # optional, top level, applies to every masked profile
+columns = ["name", "nickname"]             # extra column rules, added to the built-in ones
+allow   = ["product_name", "*_verified"]   # never masked by name; wins over columns and built-ins
+```
+
+`columns` and `allow` are arrays of globs (`path.Match` syntax) over the normalized column name (lower case, no diacritics, `firstName` becomes `first_name`).
+`allow` wins over `columns` and the built-in rules; value detectors still run on an allowed column.
+The table accepts only these two keys, and like every top-level key a project `[masking]` replaces the global one whole.
+A bare `name` column is not masked by default; add `columns = ["name"]` when it holds a person's name.
+
+Masking is defense in depth, not a security boundary: keep a database login with column privileges on production as well.
+
 ## Troubleshooting
 
 | symptom | cause |
 | --- | --- |
-| `hqdb config files must only contain ... (got keymaps)` | a foreign top-level key; only `default_profile` and `profiles` exist |
+| `hqdb config files must only contain ... (got keymaps)` | a foreign top-level key; only `default_profile`, `profiles`, and `masking` exist |
+| `unknown option "<k>" in [masking]; valid options: columns, allow` | a typo in `[masking]` |
+| a masked value is wrong, missing, or refused | see the troubleshooting table in [`masking.md`](masking.md#troubleshooting) |
 | `unknown option "<key>" for adapter "<a>"; valid options: ...` | typo, or a key from another adapter |
 | `adapter "odbc" requires conn_str` | an `odbc` profile with no `conn_str` |
 | `config file could not be found at specified path: <path>` | `HQDB_CONFIG` points at a file that does not exist |

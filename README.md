@@ -99,6 +99,16 @@ The full lists are in [`docs/config-guide.md`](docs/config-guide.md#7-when-a-con
 The access mode is not a security boundary: anyone who can edit the config can change it.
 For a real read-only setup, also connect with a database account that can only read.
 
+## Masking
+
+A Profile with `mask = true` makes `hqdb mcp` replace personal data with `masked-<12 hex>` markers before it reaches the agent: query rows, Documents, Redis replies, export files, DDL, and error texts.
+A value is masked by its column name (built-in rules in English, German, French, Polish, Russian, and Ukrainian, plus your own globs in a top-level `[masking]` table) or by its content (email, phone, IP, card, IBAN, tokens, and checksum-validated national IDs of Germany, France, Poland, and the CIS).
+Equal values share a marker within one MCP session, so the agent can still join, group, and count; markers differ between sessions on purpose.
+GDPR special categories become `masked-redacted`, and a statement that contains a marker is refused.
+The terminal UI shows data in clear.
+Masking is defense in depth and pseudonymisation, not anonymisation: the boundary is a database login with column privileges or masking views.
+See [`docs/masking.md`](docs/masking.md) for how it behaves and [`docs/config-guide.md`](docs/config-guide.md#8-masking-mcp-only) for the config keys.
+
 ## Terminal UI
 
 ```sh
@@ -199,7 +209,7 @@ Add `HQDB_CONFIG=/abs/path/hqdb.toml` to the server's environment to pin one con
 4. `$HQDB_CONFIG`, when set
 
 The merge is top-level key replacement: a higher-priority file's `profiles` table replaces the whole map.
-Only `default_profile` and `profiles` are accepted at the top level.
+Only `default_profile`, `profiles`, and `masking` are accepted at the top level.
 
 | adapter | keys |
 | --- | --- |
@@ -211,7 +221,7 @@ Only `default_profile` and `profiles` are accepted at the top level.
 | `redis` | `host` (default `localhost`), `port` (default 6379), `user`, `password`, `database`, `secure`, `separator` (default `:`) |
 | `mongodb` | `host` (default `localhost`), `port` (default 27017), `user`, `password`, `database`, `auth_source`, `secure`, `conn_str` (`mongodb://` or `mongodb+srv://`) |
 
-Every adapter also takes `access` (`read-only` or `read-write`).
+Every adapter also takes `access` (`read-only` or `read-write`) and `mask` (`true` or `false`, MCP only).
 An unknown key is rejected with the list of valid options for that adapter.
 [`docs/config-guide.md`](docs/config-guide.md) is the full guide: choosing a file, `conn_str` URL and ODBC-list forms, ClickHouse HTTP vs native, client registration, and troubleshooting.
 It is self-contained, so you can also hand an agent the link and let it write the config.

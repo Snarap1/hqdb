@@ -8,7 +8,7 @@ description: Use when writing, editing, migrating, or debugging an hqdb config f
 hqdb is a terminal database client with an MCP server for agents (`hqdb mcp`), written in Go, configured entirely by its own TOML files.
 No other tool's config files are ever read.
 
-The reference for this skill is `docs/config-guide.md` at the repository root: file locations, discovery and merge order, access modes, per-adapter key tables, `conn_str` URL and ODBC-list forms, the read-only policy, client registration, and a troubleshooting table.
+The reference for this skill is `docs/config-guide.md` at the repository root: file locations, discovery and merge order, access modes, per-adapter key tables, `conn_str` URL and ODBC-list forms, the read-only policy, masking, client registration, and a troubleshooting table.
 Read it before writing anything; this file only carries the workflow.
 
 ## Workflow
@@ -34,13 +34,22 @@ It prints one line per profile (adapter, access, `ok` or `FAIL` with the error) 
 
 ## Rules that break configs
 
-1. The top level accepts exactly two keys: `default_profile` and `profiles`.
+1. The top level accepts exactly three keys: `default_profile`, `profiles`, and `masking`.
 2. Every profile needs `adapter`: `postgres`, `mysql`, `mssql`, `odbc`, `clickhouse`, `redis`, or `mongodb`.
-3. Every key inside a profile must be valid for that adapter; `access` is valid for all of them and takes only `read-only` or `read-write`.
+3. Every key inside a profile must be valid for that adapter; `access` is valid for all of them and takes only `read-only` or `read-write`, and `mask` is valid for all of them and takes a boolean.
 4. Merge is top-level key replacement, not deep merge.
 5. `pyproject.toml` contributes only its `[tool.hqdb]` section.
 6. Passwords live in the file in plain text.
    Never echo them into a committed config, a log, a chat message, or a committed example; use placeholders.
+
+## Masking
+
+Set `mask = true` on a profile that holds personal data and is reached through `hqdb mcp`, production first; the terminal UI never masks.
+The optional top-level `[masking]` table takes only `columns` and `allow`, arrays of globs over normalized column names; a project `[masking]` replaces the global one whole.
+Add `columns = ["name"]` when a bare `name` column holds a person's name, because bare `name` is not a built-in rule.
+Markers are stable within one MCP session only, and masking is defense in depth: tell the user the boundary is a database login with column privileges.
+`hqdb check` reports a `[masking]` line.
+Section 8 of the guide carries the config keys; `docs/masking.md` carries what is masked, the rules, the detectors, and the limits.
 
 ## Postgres databases
 

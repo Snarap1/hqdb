@@ -12,7 +12,7 @@ Vocabulary (Profile, Catalog, Data view, Console, Access mode) is in `GLOSSARY.m
 ## Architecture
 
 One domain package per concern under `internal/`; `main.go` at the root is only argument dispatch.
-Dependency direction: `config` ← `adapters` ← {`catalog`, `ddl`, `rediscmd`, `mongocmd`, `check`, `server`}, `values`/`sqlrows` ← {`query`, `export`, `rediscmd`}, `adapters`/`query` ← `dataview` ← `internal/ui`, `sqlrows` ← `console` ← `internal/ui`, `consolestate` ← `internal/ui`.
+Dependency direction: `config` ← `adapters` ← {`catalog`, `ddl`, `rediscmd`, `mongocmd`, `check`, `server`}, `values` ← `mask/detect` ← `mask` ← {`check`, `server`}, `values`/`sqlrows` ← {`query`, `export`, `rediscmd`}, `adapters`/`query` ← `dataview` ← `internal/ui`, `sqlrows` ← `console` ← `internal/ui`, `consolestate` ← `internal/ui`.
 `internal/ui` never imports `internal/server` (enforced by `internal/ui/arch_test.go`), and nothing imports `server` except `main`.
 
 Screening lives at the front ends, never in the core:
@@ -21,13 +21,21 @@ Screening lives at the front ends, never in the core:
 - `internal/server` calls `screen(access, violation)`: refuse with `Refused (read-only profile): <reason>` on a read-only Profile, run unscreened on a read-write one.
 - `internal/ui` Consoles call `consoleCore.runOrAsk`: refuse a violation on a read-only Profile, otherwise ask before any write; the SQL Data view screens its typed WHERE/ORDER BY on a read-only Profile. `Model.bindAccess` hands each new tab its Profile's access.
 
+Masking (ADR-0005) lives in `internal/server` only, through `internal/mask`; the terminal UI never imports it and never masks.
+- `server.Serve` makes the session key once (`maskKey`); every tool call builds a fresh `mask.Masker` from it and the reloaded `[masking]` table, and `openProfile` returns it (nil unless the Profile sets `mask = true`).
+- Each handler defers `maskErr` right after `openProfile`, so error texts are masked too; statement tools call `guard`, which runs the marker screen (`mask.MarkerViolation`, whatever the Access mode) before the access screen.
+- `export.Query` takes an optional `RowTransform`; the server passes `Masker.Row`, the terminal UI passes nil.
+
 The MCP server opens a **fresh connection per tool call** and closes it after; the terminal UI keeps one lazy connection per (Profile, Database) pair (`internal/ui/pool.go`; a postgres Profile without `dbname` discovers its Databases, ADR-0004) plus a dedicated session per SQL Console, bound to one Database.
 Every terminal UI tab kind implements the `tab` interface (`internal/ui/tab.go`); `adapterui.go` is the one per-Adapter dispatch table.
 Visual design follows `docs/ui/TUI database client.html`; colors live only in `theme.go`.
 
 Rules that look like bugs and are not:
 - SQL screening matches write keywords as whole words, so `SELECT ... FOR UPDATE` and a column literally named `update` or `comment` are refused on a read-only Profile.
-- Config merge is top-level key replacement, not deep merge.
+- Config merge is top-level key replacement, not deep merge; a project `[masking]` replaces the global one whole.
+- Markers differ between MCP sessions: the key is random per process and never stored.
+- A bare `name` column is not masked: it is deliberately not a built-in rule; users add it to `[masking] columns`.
+- A phone stored as a bare integer is caught by column name only: the phone detector needs a `+`, `00`, or a national trunk prefix.
 - Profiles are raw `map[string]any` tables read through `config.Opt*` accessors; per-adapter key validation rejects unknown keys with the valid-key list.
 
 ## Development Commands
@@ -52,6 +60,7 @@ Releases come from `.github/workflows/release.yml` on a `v*` tag, which stamps `
 - English only in messages and docs; each sentence on its own line in prose docs.
 - Commit messages carry no `Co-Authored-By` trailer for the agent, even when the harness suggests one.
 - `docs/config-guide.md` is the user-facing reference (locations, access modes, adapter keys, `conn_str` forms, policy, registration, troubleshooting); keep it, `README.md`, and `.claude/skills/hqdb-config/` in sync with behavior changes.
+- `docs/masking.md` is the user-facing reference for how masking behaves (what is masked, markers, name rules, detectors, limits); the guide keeps only the masking config keys and links to it.
 - `apm/` only registers `hqdb mcp` with a harness; config material belongs in the guide.
 
 ## Testing
