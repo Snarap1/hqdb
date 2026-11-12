@@ -27,7 +27,7 @@ func TestRunWithoutProbesReportsEveryProfile(t *testing.T) {
 		t.Error("a config with an invalid profile must not pass")
 	}
 	want := []string{
-		"bad    postgres  -           FAIL  unknown option \"nope\" for adapter \"postgres\"; valid options: access, adapter, conn_str, database, dbname, host, password, port, sslmode, user",
+		"bad    postgres  -           FAIL  unknown option \"nope\" for adapter \"postgres\"; valid options: access, adapter, conn_str, database, dbname, host, mask, password, port, sslmode, user",
 		"cache  redis     read-write  ok",
 		"pg     postgres  read-only   ok    (default)",
 	}
@@ -45,6 +45,53 @@ func TestRunSelectsProfiles(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "bad") {
 		t.Errorf("unselected profile reported:\n%s", out.String())
+	}
+}
+
+func TestRunValidatesMaskAndMaskingTable(t *testing.T) {
+	cases := []struct {
+		name     string
+		profile  map[string]any
+		masking  map[string]any
+		wantPass bool
+		want     []string
+	}{
+		{"mask true and no table", map[string]any{"adapter": "postgres", "mask": true}, nil, true,
+			[]string{"p  postgres  read-only  ok"}},
+		{"mask not a boolean", map[string]any{"adapter": "postgres", "mask": "yes"}, nil, false,
+			[]string{`p  postgres  -  FAIL  option "mask" must be a boolean`}},
+		{"valid masking table", map[string]any{"adapter": "postgres", "mask": true},
+			map[string]any{"columns": []any{"name"}, "allow": []any{"*_verified"}}, true,
+			[]string{"p          postgres  read-only  ok", "[masking]  -         -          ok"}},
+		{"unknown masking key", map[string]any{"adapter": "postgres"},
+			map[string]any{"region": "eu"}, false,
+			[]string{`[masking]  -         -          FAIL  unknown option "region" in [masking]; valid options: columns, allow`}},
+		{"malformed glob", map[string]any{"adapter": "postgres"},
+			map[string]any{"columns": []any{"[a"}}, false, []string{"[masking]  -         -          FAIL"}},
+		{"columns not strings", map[string]any{"adapter": "postgres"},
+			map[string]any{"columns": "name"}, false, []string{"[masking]  -         -          FAIL"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := &config.Config{Profiles: map[string]map[string]any{"p": c.profile}, Masking: c.masking}
+			var out bytes.Buffer
+			if got := Run(context.Background(), cfg, Options{}, &out); got != c.wantPass {
+				t.Errorf("pass = %v, want %v\n%s", got, c.wantPass, out.String())
+			}
+			for _, w := range c.want {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("output lacks %q:\n%s", w, out.String())
+				}
+			}
+		})
+	}
+}
+
+func TestRunWithoutMaskingTableHasNoMaskingLine(t *testing.T) {
+	var out bytes.Buffer
+	Run(context.Background(), testConfig(), Options{}, &out)
+	if strings.Contains(out.String(), "[masking]") {
+		t.Errorf("unexpected masking line:\n%s", out.String())
 	}
 }
 

@@ -63,7 +63,7 @@ func TestQueryNoLongerScreens(t *testing.T) {
 	// reach the driver instead of being rejected inside Query.
 	db := openFakeDB(t)
 	dest := t.TempDir() + "/out.csv"
-	n, err := Query(context.Background(), db, "DROP TABLE widgets", dest, "csv", 0)
+	n, err := Query(context.Background(), db, "DROP TABLE widgets", dest, "csv", 0, nil)
 	if err != nil {
 		t.Fatalf("Query returned an error instead of executing: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestQueryNoLongerScreens(t *testing.T) {
 }
 
 func TestQueryMissingParentDir(t *testing.T) {
-	_, err := Query(context.Background(), nil, "SELECT 1", "/tmp/hqdb-does-not-exist/out.csv", "csv", 0)
+	_, err := Query(context.Background(), nil, "SELECT 1", "/tmp/hqdb-does-not-exist/out.csv", "csv", 0, nil)
 	if err == nil {
 		t.Fatal("expected an error for a missing parent directory")
 	}
@@ -92,7 +92,7 @@ func TestQueryRespectsCancelledContext(t *testing.T) {
 	db := openFakeDB(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := Query(ctx, db, "SELECT 1", t.TempDir()+"/out.csv", "csv", 0)
+	_, err := Query(ctx, db, "SELECT 1", t.TempDir()+"/out.csv", "csv", 0, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("got %v, want a context.Canceled error", err)
 	}

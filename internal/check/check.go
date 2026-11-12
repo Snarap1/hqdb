@@ -15,6 +15,7 @@ import (
 	"github.com/Snarap1/hqdb/internal/adapters"
 	"github.com/Snarap1/hqdb/internal/catalog"
 	"github.com/Snarap1/hqdb/internal/config"
+	"github.com/Snarap1/hqdb/internal/mask"
 	"github.com/Snarap1/hqdb/internal/query"
 	"github.com/Snarap1/hqdb/internal/rediscmd"
 )
@@ -32,7 +33,9 @@ type Options struct {
 }
 
 // Run writes one line per Profile (name, adapter, access, ok or FAIL, and
-// the error or "(default)") to w and reports whether every one passed.
+// the error or "(default)") to w, then a "[masking]" line when the config
+// has a [masking] table, and reports whether every line passed. A Profile's
+// mask option is validated with the rest of its options.
 func Run(ctx context.Context, cfg *config.Config, opts Options, w io.Writer) bool {
 	names := opts.Profiles
 	if len(names) == 0 {
@@ -51,6 +54,14 @@ func Run(ctx context.Context, cfg *config.Config, opts Options, w io.Writer) boo
 			detail = "(default)"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, adapter, access, status, detail)
+	}
+	if cfg.Masking != nil {
+		status, detail := "ok", ""
+		if _, err := mask.New(cfg.Masking, nil); err != nil {
+			pass = false
+			status, detail = "FAIL", err.Error()
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", "[masking]", "-", "-", status, detail)
 	}
 	tw.Flush()
 	// tabwriter pads the empty last cell too; drop that trailing space.

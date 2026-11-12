@@ -13,6 +13,7 @@ import (
 	"github.com/Snarap1/hqdb/internal/config"
 	"github.com/Snarap1/hqdb/internal/ddl"
 	"github.com/Snarap1/hqdb/internal/export"
+	"github.com/Snarap1/hqdb/internal/mask"
 	"github.com/Snarap1/hqdb/internal/mongocmd"
 	"github.com/Snarap1/hqdb/internal/query"
 	"github.com/Snarap1/hqdb/internal/readonly"
@@ -23,6 +24,7 @@ import (
 // done, reporting version in the MCP implementation handshake.
 func Serve(ctx context.Context, version string) error {
 	server := mcp.NewServer(&mcp.Implementation{Name: "hqdb", Version: version}, nil)
+	maskKey = mask.NewKey()
 	registerTools(server)
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
@@ -30,26 +32,31 @@ func Serve(ctx context.Context, version string) error {
 // openProfile resolves a profile name (or the default profile), opens a
 // connection, and closes it when the returned function is called. It also
 // returns the profile's access mode, which decides whether statements are
-// screened (ADR-0003). A non-empty database selects one Database of a
+// screened (ADR-0003), and its Masker, which is nil unless the Profile sets
+// mask = true (ADR-0005). A non-empty database selects one Database of a
 // postgres Profile (ADR-0004); every other adapter ignores it.
-func openProfile(ctx context.Context, name, database string) (adapters.DB, config.Access, func(), error) {
+func openProfile(ctx context.Context, name, database string) (adapters.DB, config.Access, *mask.Masker, func(), error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	profile, err := cfg.Profile(name)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	access, err := config.ProfileAccess(profile)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
+	}
+	m, err := maskerFor(cfg, profile)
+	if err != nil {
+		return nil, "", nil, nil, err
 	}
 	conn, err := adapters.OpenDatabase(ctx, profile, database)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, maskErr(m, err)
 	}
-	return conn, access, conn.Close, nil
+	return conn, access, m, conn.Close, nil
 }
 
 // screen refuses a statement whose detector reported violation, unless the
@@ -68,6 +75,7 @@ type ProfileInfo struct {
 	Adapter   string        `json:"adapter"`
 	Access    config.Access `json:"access"`
 	IsDefault bool          `json:"is_default"`
+	Masked    bool          `json:"masked"`
 }
 
 type listProfilesIn struct{}
@@ -89,11 +97,13 @@ func listProfiles(ctx context.Context, req *mcp.CallToolRequest, in listProfiles
 			adapter = config.AdapterName(cfg.Profiles[name])
 		}
 		access, _ := config.ProfileAccess(cfg.Profiles[name])
+		masked, _ := config.ProfileMask(cfg.Profiles[name])
 		out.Profiles = append(out.Profiles, ProfileInfo{
 			Name:      name,
 			Adapter:   adapter,
 			Access:    access,
 			IsDefault: name == cfg.DefaultProfile,
+			Masked:    masked,
 		})
 	}
 	return nil, out, nil
@@ -106,12 +116,13 @@ type getSchemaIn struct {
 	IncludeColumns bool     `json:"include_columns,omitempty" jsonschema:"sample key types when the level contains redis keys"`
 }
 
-func getSchemaTool(ctx context.Context, req *mcp.CallToolRequest, in getSchemaIn) (*mcp.CallToolResult, catalog.SchemaOut, error) {
-	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
+func getSchemaTool(ctx context.Context, req *mcp.CallToolRequest, in getSchemaIn) (_ *mcp.CallToolResult, _ catalog.SchemaOut, err error) {
+	conn, _, m, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, catalog.SchemaOut{}, err
 	}
 	defer closeConn()
+	defer func() { err = maskErr(m, err) }()
 	out, err := catalog.GetSchema(ctx, conn, in.Path, in.NameFilter, in.IncludeColumns, catalog.DefaultLimits)
 	if err != nil {
 		return nil, catalog.SchemaOut{}, err
@@ -124,12 +135,13 @@ type getColumnsIn struct {
 	Path    []string `json:"path" jsonschema:"path ending with the table, e.g. [\"hqdb\",\"public\",\"widgets\"]"`
 }
 
-func getColumnsTool(ctx context.Context, req *mcp.CallToolRequest, in getColumnsIn) (*mcp.CallToolResult, catalog.ColumnsOut, error) {
-	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
+func getColumnsTool(ctx context.Context, req *mcp.CallToolRequest, in getColumnsIn) (_ *mcp.CallToolResult, _ catalog.ColumnsOut, err error) {
+	conn, _, m, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, catalog.ColumnsOut{}, err
 	}
 	defer closeConn()
+	defer func() { err = maskErr(m, err) }()
 	out, err := catalog.GetColumns(ctx, conn, in.Path)
 	if err != nil {
 		return nil, catalog.ColumnsOut{}, err
@@ -142,15 +154,19 @@ type getDdlIn struct {
 	Path    []string `json:"path" jsonschema:"path ending with the table or view, e.g. [\"hqdb\",\"public\",\"widgets\"] on postgres, [\"hqdb\",\"widgets\"] on clickhouse"`
 }
 
-func getDdlTool(ctx context.Context, req *mcp.CallToolRequest, in getDdlIn) (*mcp.CallToolResult, ddl.Out, error) {
-	conn, _, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
+func getDdlTool(ctx context.Context, req *mcp.CallToolRequest, in getDdlIn) (_ *mcp.CallToolResult, _ ddl.Out, err error) {
+	conn, _, m, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, ddl.Out{}, err
 	}
 	defer closeConn()
+	defer func() { err = maskErr(m, err) }()
 	out, err := ddl.GetDDL(ctx, conn, in.Path)
 	if err != nil {
 		return nil, ddl.Out{}, err
+	}
+	if m != nil {
+		out.Definition = m.Text(out.Definition)
 	}
 	return nil, *out, nil
 }
@@ -168,19 +184,23 @@ type RunQueryOut struct {
 	Rows      [][]any  `json:"rows"`
 	RowCount  int      `json:"row_count"`
 	Truncated bool     `json:"truncated"`
+	// MaskedColumns names the columns with a masked value; masked
+	// Profiles only (ADR-0005).
+	MaskedColumns []string `json:"masked_columns,omitempty"`
 }
 
-func runQueryTool(ctx context.Context, req *mcp.CallToolRequest, in runQueryIn) (*mcp.CallToolResult, RunQueryOut, error) {
-	conn, access, closeConn, err := openProfile(ctx, in.Profile, in.Database)
+func runQueryTool(ctx context.Context, req *mcp.CallToolRequest, in runQueryIn) (_ *mcp.CallToolResult, _ RunQueryOut, err error) {
+	conn, access, m, closeConn, err := openProfile(ctx, in.Profile, in.Database)
 	if err != nil {
 		return nil, RunQueryOut{}, err
 	}
 	defer closeConn()
+	defer func() { err = maskErr(m, err) }()
 	sqlConn, ok := conn.(*adapters.SQL)
 	if !ok {
 		return nil, RunQueryOut{}, adapters.ErrNotSQL(conn.Kind(), "run_query")
 	}
-	if err := screen(access, readonly.Violation(in.SQL)); err != nil {
+	if err := guard(access, m, readonly.Violation(in.SQL), in.SQL); err != nil {
 		return nil, RunQueryOut{}, err
 	}
 	limit := in.Limit
@@ -191,11 +211,16 @@ func runQueryTool(ctx context.Context, req *mcp.CallToolRequest, in runQueryIn) 
 	if err != nil {
 		return nil, RunQueryOut{}, err
 	}
+	var maskedColumns []string
+	if m != nil {
+		maskedColumns = m.Rows(res.Columns, res.Rows)
+	}
 	return nil, RunQueryOut{
-		Columns:   res.Columns,
-		Rows:      res.Rows,
-		RowCount:  res.RowCount,
-		Truncated: res.Truncated,
+		Columns:       res.Columns,
+		Rows:          res.Rows,
+		RowCount:      res.RowCount,
+		Truncated:     res.Truncated,
+		MaskedColumns: maskedColumns,
 	}, nil
 }
 
@@ -211,24 +236,25 @@ type RunRedisOut struct {
 	Result  any    `json:"result"`
 }
 
-func runRedisTool(ctx context.Context, req *mcp.CallToolRequest, in runRedisIn) (*mcp.CallToolResult, RunRedisOut, error) {
-	conn, access, closeConn, err := openProfile(ctx, in.Profile, "")
+func runRedisTool(ctx context.Context, req *mcp.CallToolRequest, in runRedisIn) (_ *mcp.CallToolResult, _ RunRedisOut, err error) {
+	conn, access, m, closeConn, err := openProfile(ctx, in.Profile, "")
 	if err != nil {
 		return nil, RunRedisOut{}, err
 	}
 	defer closeConn()
+	defer func() { err = maskErr(m, err) }()
 	redisConn, ok := conn.(*adapters.Redis)
 	if !ok {
 		return nil, RunRedisOut{}, adapters.ErrNotSQL(conn.Kind(), "run_redis")
 	}
-	if err := screen(access, rediscmd.CommandViolation(in.Command)); err != nil {
+	if err := guard(access, m, rediscmd.CommandViolation(in.Command), append([]string{in.Command}, in.Args...)...); err != nil {
 		return nil, RunRedisOut{}, err
 	}
 	result, err := rediscmd.Run(ctx, redisConn, in.Command, in.Args)
 	if err != nil {
 		return nil, RunRedisOut{}, err
 	}
-	return nil, RunRedisOut{Command: strings.TrimSpace(in.Command), Result: result}, nil
+	return nil, RunRedisOut{Command: strings.TrimSpace(in.Command), Result: maskRedis(m, in.Command, result)}, nil
 }
 
 type runMongoIn struct {
@@ -253,20 +279,24 @@ type RunMongoOut struct {
 	Documents []any  `json:"documents"`
 	Count     int64  `json:"count"`
 	Truncated bool   `json:"truncated"`
+	// MaskedFields lists the dotted paths of masked fields; masked
+	// Profiles only (ADR-0005).
+	MaskedFields []string `json:"masked_fields,omitempty"`
 }
 
-func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) (*mcp.CallToolResult, RunMongoOut, error) {
-	conn, access, closeConn, err := openProfile(ctx, in.Profile, "")
+func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) (_ *mcp.CallToolResult, _ RunMongoOut, err error) {
+	conn, access, m, closeConn, err := openProfile(ctx, in.Profile, "")
 	if err != nil {
 		return nil, RunMongoOut{}, err
 	}
 	defer closeConn()
+	defer func() { err = maskErr(m, err) }()
 	mongoConn, ok := conn.(*adapters.Mongo)
 	if !ok {
 		return nil, RunMongoOut{}, adapters.ErrNotSQL(conn.Kind(), "run_mongo")
 	}
 	op := mongocmd.NormalizeOperation(in.Operation)
-	if err := screen(access, mongocmd.OperationViolation(op)); err != nil {
+	if err := guard(access, m, mongocmd.OperationViolation(op), in.Filter, in.Projection, in.Sort, in.Pipeline, in.Document, in.Documents, in.Update); err != nil {
 		return nil, RunMongoOut{}, err
 	}
 	if op == "aggregate" {
@@ -299,7 +329,8 @@ func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) 
 	if err != nil {
 		return nil, RunMongoOut{}, err
 	}
-	return nil, RunMongoOut{Operation: op, Documents: res.Documents, Count: res.Count, Truncated: res.Truncated}, nil
+	docs, maskedFields := maskMongo(m, op, in.Field, res.Documents)
+	return nil, RunMongoOut{Operation: op, Documents: docs, Count: res.Count, Truncated: res.Truncated, MaskedFields: maskedFields}, nil
 }
 
 type exportQueryIn struct {
@@ -318,12 +349,13 @@ type ExportQueryOut struct {
 	RowCount int    `json:"row_count"`
 }
 
-func exportQueryTool(ctx context.Context, req *mcp.CallToolRequest, in exportQueryIn) (*mcp.CallToolResult, ExportQueryOut, error) {
-	conn, access, closeConn, err := openProfile(ctx, in.Profile, in.Database)
+func exportQueryTool(ctx context.Context, req *mcp.CallToolRequest, in exportQueryIn) (_ *mcp.CallToolResult, _ ExportQueryOut, err error) {
+	conn, access, m, closeConn, err := openProfile(ctx, in.Profile, in.Database)
 	if err != nil {
 		return nil, ExportQueryOut{}, err
 	}
 	defer closeConn()
+	defer func() { err = maskErr(m, err) }()
 	sqlConn, ok := conn.(*adapters.SQL)
 	if !ok {
 		return nil, ExportQueryOut{}, adapters.ErrNotSQL(conn.Kind(), "export_query")
@@ -334,22 +366,32 @@ func exportQueryTool(ctx context.Context, req *mcp.CallToolRequest, in exportQue
 			return nil, ExportQueryOut{}, err
 		}
 	}
-	if err := screen(access, readonly.Violation(in.SQL)); err != nil {
+	if err := guard(access, m, readonly.Violation(in.SQL), in.SQL); err != nil {
 		return nil, ExportQueryOut{}, err
 	}
-	n, err := export.Query(ctx, sqlConn.SQL(), in.SQL, in.DestPath, format, in.Limit)
+	var transform export.RowTransform
+	if m != nil {
+		transform = m.Row
+	}
+	n, err := export.Query(ctx, sqlConn.SQL(), in.SQL, in.DestPath, format, in.Limit, transform)
 	if err != nil {
 		return nil, ExportQueryOut{}, err
 	}
 	return nil, ExportQueryOut{Path: in.DestPath, Format: format, RowCount: n}, nil
 }
 
+// maskNote ends the description of every tool that returns data or takes a
+// statement, so the agent knows how a masked Profile behaves (ADR-0005).
+const maskNote = " On a masked profile (masked is true in list_profiles) personal data comes back as masked-... markers; " +
+	"equal values share a marker within the session, so they can still be joined, grouped, and counted; " +
+	"a marker cannot be used in a statement, and a statement that contains one is refused."
+
 // registerTools adds every tool to the server.
 func registerTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_profiles",
 		Description: "List the database profiles from the hqdb config files, with their adapter, " +
-			"access mode (read-only or read-write), and which one is the default. Never includes passwords.",
+			"access mode (read-only or read-write), whether it is masked, and which one is the default. Never includes passwords.",
 	}, listProfiles)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -372,7 +414,7 @@ func registerTools(server *mcp.Server) {
 			"columns, primary key, foreign keys, indexes, and check/unique constraints from the " +
 			"system catalogs (native is false), but return a view's stored definition verbatim " +
 			"(native is true). On postgres the path is [database, schema, table], the first segment being " +
-			"the database (see get_schema with an empty path). Not available for redis or mongodb.",
+			"the database (see get_schema with an empty path). Not available for redis or mongodb." + maskNote,
 	}, getDdlTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -383,7 +425,7 @@ func registerTools(server *mcp.Server) {
 			"must not stack statements, and must not contain write keywords " +
 			"(insert, update, delete, drop, truncate, alter, create, call, ...). The SQL is sent to the database " +
 			"unmodified; no LIMIT is injected, so use the limit argument to bound the response. " +
-			"On a read-write profile any statement runs unscreened.",
+			"On a read-write profile any statement runs unscreened." + maskNote,
 	}, runQueryTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -391,7 +433,7 @@ func registerTools(server *mcp.Server) {
 		Description: "Run one Redis command against a redis profile. On a read-only profile only " +
 			"allowlisted read commands (get, mget, hgetall, smembers, scan, ttl, type, info, zrange, " +
 			"xrange, geosearch, ...) are permitted; writes, blocking commands, eval, subscribe, and " +
-			"config are refused. On a read-write profile any command runs.",
+			"config are refused. On a read-write profile any command runs." + maskNote,
 	}, runRedisTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -401,13 +443,13 @@ func registerTools(server *mcp.Server) {
 			"insertOne (document), insertMany (documents), updateOne (filter, update), or deleteOne " +
 			"(filter). Filters, pipelines, documents, and updates are MongoDB Extended JSON strings, " +
 			"so {\"$oid\": ...} and {\"$date\": ...} work. The four writing operations and the " +
-			"aggregation stages that write ($out, $merge) are refused on a read-only profile.",
+			"aggregation stages that write ($out, $merge) are refused on a read-only profile." + maskNote,
 	}, runMongoTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "export_query",
 		Description: "Run one SQL statement (screened like run_query; a postgres profile may expose several databases, pick one with database) and stream the results into a csv, json, or " +
 			"ndjson file. The format is inferred from the file extension when not given. The " +
-			"destination's parent directory must exist; it is not created.",
+			"destination's parent directory must exist; it is not created." + maskNote,
 	}, exportQueryTool)
 }

@@ -20,6 +20,9 @@ import (
 type Config struct {
 	DefaultProfile string
 	Profiles       map[string]map[string]any
+	// Masking is the raw [masking] table, validated by mask.New; nil when
+	// the config has none.
+	Masking map[string]any
 }
 
 // Profile returns the raw profile table for name, falling back to
@@ -140,9 +143,15 @@ func Load() (*Config, error) {
 				}
 				cfg.Profiles[name] = pm
 			}
+		case "masking":
+			m, ok := v.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("masking must be a TOML table")
+			}
+			cfg.Masking = m
 		default:
 			return nil, fmt.Errorf(
-				"hqdb config files must only contain default_profile and profiles tables (got %s)", k)
+				"hqdb config files must only contain default_profile, profiles, and masking tables (got %s)", k)
 		}
 	}
 	return cfg, nil
@@ -155,13 +164,13 @@ const SupportedAdapters = "postgres, mysql, mssql, odbc, clickhouse, redis, mong
 // adapterKeys lists the profile keys each adapter accepts, including aliases
 // (e.g. database is an alias of dbname for postgres/mysql/mssql).
 var adapterKeys = map[string][]string{
-	"postgres":   {"access", "adapter", "conn_str", "database", "dbname", "host", "password", "port", "sslmode", "user"},
-	"mysql":      {"access", "adapter", "conn_str", "database", "dbname", "host", "password", "port", "tls", "user"},
-	"mssql":      {"access", "adapter", "conn_str", "database", "dbname", "encrypt", "host", "password", "port", "user"},
-	"odbc":       {"access", "adapter", "conn_str"},
-	"clickhouse": {"access", "adapter", "conn_str", "database", "host", "password", "port", "protocol", "secure", "user"},
-	"redis":      {"access", "adapter", "database", "host", "password", "port", "secure", "separator", "user"},
-	"mongodb":    {"access", "adapter", "auth_source", "conn_str", "database", "host", "password", "port", "secure", "user"},
+	"postgres":   {"access", "adapter", "conn_str", "database", "dbname", "host", "mask", "password", "port", "sslmode", "user"},
+	"mysql":      {"access", "adapter", "conn_str", "database", "dbname", "host", "mask", "password", "port", "tls", "user"},
+	"mssql":      {"access", "adapter", "conn_str", "database", "dbname", "encrypt", "host", "mask", "password", "port", "user"},
+	"odbc":       {"access", "adapter", "conn_str", "mask"},
+	"clickhouse": {"access", "adapter", "conn_str", "database", "host", "mask", "password", "port", "protocol", "secure", "user"},
+	"redis":      {"access", "adapter", "database", "host", "mask", "password", "port", "secure", "separator", "user"},
+	"mongodb":    {"access", "adapter", "auth_source", "conn_str", "database", "host", "mask", "password", "port", "secure", "user"},
 }
 
 // AdapterName returns the profile's adapter, defaulting to duckdb like the
@@ -194,7 +203,16 @@ func Validate(p map[string]any) (string, error) {
 	if _, err := ProfileAccess(p); err != nil {
 		return "", err
 	}
+	if _, err := ProfileMask(p); err != nil {
+		return "", err
+	}
 	return adapter, nil
+}
+
+// ProfileMask reports whether the MCP server masks personal data for the
+// Profile (ADR-0005); the default is false.
+func ProfileMask(p map[string]any) (bool, error) {
+	return OptBool(p, "mask")
 }
 
 // Access is a Profile's access mode: what the MCP server and the terminal

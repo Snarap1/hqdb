@@ -59,7 +59,7 @@ func (d *dataViewTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
 		if !ok {
 			return exportViewMsg{tab: d, seq: seq, format: format, err: fmt.Errorf("export is not available for %s", conn.Kind())}
 		}
-		n, err := export.Query(ctx, sqlConn.SQL(), sqlText, destPath, format, 0)
+		n, err := export.Query(ctx, sqlConn.SQL(), sqlText, destPath, format, 0, nil)
 		return exportViewMsg{tab: d, seq: seq, format: format, written: n, err: err, cancelled: ctx.Err() != nil}
 	}
 }

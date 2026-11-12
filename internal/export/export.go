@@ -44,11 +44,26 @@ type Querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// RowTransform rewrites one row before a writer sees it; the MCP server uses
+// it to mask personal data (ADR-0005). nil means rows are written unchanged.
+type RowTransform func(columns []string, row []any) []any
+
+// streamRows is sqlrows.Stream with transform applied once to every row
+// before emit, so every format writer sees the same rows.
+func streamRows(rows *sql.Rows, columns []string, limit int, transform RowTransform, emit func([]any) error) (int, error) {
+	return sqlrows.Stream(rows, columns, limit, func(row []any) error {
+		if transform != nil {
+			row = transform(columns, row)
+		}
+		return emit(row)
+	})
+}
+
 // Query streams a SQL query into destPath. limit <= 0 means unlimited. The
 // caller is responsible for screening sqlText first. ctx is passed to the
 // driver so a cancelled or timed-out caller stops the query in flight; there
 // is no default timeout.
-func Query(ctx context.Context, conn Querier, sqlText, destPath, format string, limit int) (int, error) {
+func Query(ctx context.Context, conn Querier, sqlText, destPath, format string, limit int, transform RowTransform) (int, error) {
 	dir := filepath.Dir(destPath)
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return 0, fmt.Errorf("parent directory does not exist: %s", dir)
@@ -70,11 +85,11 @@ func Query(ctx context.Context, conn Querier, sqlText, destPath, format string, 
 	var writeErr error
 	switch format {
 	case "csv":
-		written, writeErr = writeCSV(f, rows, columns, limit)
+		written, writeErr = writeCSV(f, rows, columns, limit, transform)
 	case "json":
-		written, writeErr = writeJSONRows(f, rows, columns, limit)
+		written, writeErr = writeJSONRows(f, rows, columns, limit, transform)
 	case "ndjson":
-		written, writeErr = writeNDJSON(f, rows, columns, limit)
+		written, writeErr = writeNDJSON(f, rows, columns, limit, transform)
 	default:
 		writeErr = fmt.Errorf("format must be one of %s (got %q)", strings.Join(Formats, ", "), format)
 	}
@@ -299,12 +314,12 @@ func writeDocumentsCSV(destPath string, src DocumentSource) (n int, err error) {
 }
 
 // writeCSV writes a header row and one line per row, stringifying every value.
-func writeCSV(f *os.File, rows *sql.Rows, columns []string, limit int) (int, error) {
+func writeCSV(f *os.File, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
 	w := csv.NewWriter(f)
 	if err := w.Write(columns); err != nil {
 		return 0, err
 	}
-	n, err := sqlrows.Stream(rows, columns, limit, func(row []any) error {
+	n, err := streamRows(rows, columns, limit, transform, func(row []any) error {
 		rec := make([]string, len(row))
 		for i, v := range row {
 			rec[i] = stringify(v)
@@ -319,13 +334,13 @@ func writeCSV(f *os.File, rows *sql.Rows, columns []string, limit int) (int, err
 }
 
 // writeJSONRows writes a streamed JSON array of row objects.
-func writeJSONRows(f *os.File, rows *sql.Rows, columns []string, limit int) (int, error) {
+func writeJSONRows(f *os.File, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
 	if _, err := f.WriteString("["); err != nil {
 		return 0, err
 	}
 	enc := json.NewEncoder(f)
 	first := true
-	n, err := sqlrows.Stream(rows, columns, limit, func(row []any) error {
+	n, err := streamRows(rows, columns, limit, transform, func(row []any) error {
 		if !first {
 			if _, err := f.WriteString(","); err != nil {
 				return err
@@ -342,9 +357,9 @@ func writeJSONRows(f *os.File, rows *sql.Rows, columns []string, limit int) (int
 }
 
 // writeNDJSON writes one row object per line.
-func writeNDJSON(f *os.File, rows *sql.Rows, columns []string, limit int) (int, error) {
+func writeNDJSON(f *os.File, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
 	enc := json.NewEncoder(f)
-	return sqlrows.Stream(rows, columns, limit, func(row []any) error {
+	return streamRows(rows, columns, limit, transform, func(row []any) error {
 		return enc.Encode(sqlrows.Object(columns, row))
 	})
 }

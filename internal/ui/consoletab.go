@@ -142,7 +142,7 @@ func (s *consoleSession) export(ctx context.Context, pool *connPool, stmt, destP
 		return 0, false, err
 	}
 	defer func() { reset = s.dropIfCancelled(ctx) }()
-	n, err = export.Query(ctx, s.conn, stmt, destPath, format, 0)
+	n, err = export.Query(ctx, s.conn, stmt, destPath, format, 0, nil)
 	return n, false, err
 }
 

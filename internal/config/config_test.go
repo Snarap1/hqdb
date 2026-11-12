@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestValidateUnknownKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for an unknown profile key")
 	}
-	want := `unknown option "foo" for adapter "postgres"; valid options: access, adapter, conn_str, database, dbname, host, password, port, sslmode, user`
+	want := `unknown option "foo" for adapter "postgres"; valid options: access, adapter, conn_str, database, dbname, host, mask, password, port, sslmode, user`
 	if err.Error() != want {
 		t.Errorf("got %q, want %q", err, want)
 	}
@@ -290,5 +291,113 @@ func TestValidateRejectsBadAccess(t *testing.T) {
 	want := `option "access" must be "read-only" or "read-write" (got "rw")`
 	if err == nil || err.Error() != want {
 		t.Errorf("got %v, want %q", err, want)
+	}
+}
+
+func TestProfileMask(t *testing.T) {
+	cases := []struct {
+		name    string
+		profile map[string]any
+		want    bool
+		wantErr string
+	}{
+		{"missing defaults to false", map[string]any{"adapter": "postgres"}, false, ""},
+		{"true", map[string]any{"adapter": "postgres", "mask": true}, true, ""},
+		{"false", map[string]any{"adapter": "postgres", "mask": false}, false, ""},
+		{"not a boolean", map[string]any{"adapter": "postgres", "mask": "yes"}, false,
+			`option "mask" must be a boolean`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ProfileMask(c.profile)
+			if c.wantErr != "" {
+				if err == nil || err.Error() != c.wantErr {
+					t.Fatalf("got error %v, want %q", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Errorf("got %v (err=%v), want %v", got, err, c.want)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsMaskOnEveryAdapter(t *testing.T) {
+	for _, adapter := range strings.Split(SupportedAdapters, ", ") {
+		if _, err := Validate(map[string]any{"adapter": adapter, "mask": true}); err != nil {
+			t.Errorf("%s: %v", adapter, err)
+		}
+	}
+}
+
+func TestValidateRejectsBadMask(t *testing.T) {
+	_, err := Validate(map[string]any{"adapter": "mysql", "mask": "yes"})
+	want := `option "mask" must be a boolean`
+	if err == nil || err.Error() != want {
+		t.Errorf("got %v, want %q", err, want)
+	}
+}
+
+func TestLoadMaskingTable(t *testing.T) {
+	cases := []struct {
+		name    string
+		toml    string
+		want    map[string]any
+		wantErr string
+	}{
+		{"absent", "[profiles.p]\nadapter = \"postgres\"\n", nil, ""},
+		{"table kept raw", "[masking]\ncolumns = [\"name\"]\nallow = [\"*_verified\"]\n",
+			map[string]any{"columns": []any{"name"}, "allow": []any{"*_verified"}}, ""},
+		{"not a table", "masking = 1\n", nil, "masking must be a TOML table"},
+		{"unknown top-level key", "proflies = 1\n", nil,
+			"hqdb config files must only contain default_profile, profiles, and masking tables (got proflies)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("HQDB_CONFIG", "")
+			if err := os.WriteFile(filepath.Join(home, ".hqdb.toml"), []byte(c.toml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load()
+			if c.wantErr != "" {
+				if err == nil || err.Error() != c.wantErr {
+					t.Fatalf("got error %v, want %q", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg.Masking, c.want) {
+				t.Errorf("Masking = %#v, want %#v", cfg.Masking, c.want)
+			}
+		})
+	}
+}
+
+func TestLoadMaskingReplacesWhole(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("HQDB_CONFIG", "")
+	if err := os.WriteFile(filepath.Join(home, ".hqdb.toml"), []byte("[masking]\ncolumns = [\"a\"]\nallow = [\"b\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "hqdb.toml"), []byte("[masking]\ncolumns = [\"c\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(cwd)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"columns": []any{"c"}}
+	if !reflect.DeepEqual(cfg.Masking, want) {
+		t.Errorf("Masking = %#v, want %#v (top-level replacement)", cfg.Masking, want)
 	}
 }

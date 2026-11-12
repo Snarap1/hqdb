@@ -98,7 +98,7 @@ func TestOpenRejectsUnknownProfileKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for an unknown profile key")
 	}
-	want := `unknown option "nope" for adapter "postgres"; valid options: access, adapter, conn_str, database, dbname, host, password, port, sslmode, user`
+	want := `unknown option "nope" for adapter "postgres"; valid options: access, adapter, conn_str, database, dbname, host, mask, password, port, sslmode, user`
 	if err.Error() != want {
 		t.Errorf("got %q, want %q", err, want)
 	}

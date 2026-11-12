@@ -55,6 +55,41 @@ user = "hq"
 password = "hq"
 dbname = "hqdb"
 
+[profiles.pg-masked]
+adapter = "postgres"
+mask = true
+host = "127.0.0.1"
+port = 55432
+user = "hq"
+password = "hq"
+dbname = "hqdb"
+
+[profiles.pg-masked-rw]
+adapter = "postgres"
+mask = true
+access = "read-write"
+host = "127.0.0.1"
+port = 55432
+user = "hq"
+password = "hq"
+dbname = "hqdb"
+
+[profiles.redis-masked]
+adapter = "redis"
+mask = true
+host = "127.0.0.1"
+port = 56379
+
+[profiles.mongo-masked]
+adapter = "mongodb"
+mask = true
+host = "127.0.0.1"
+port = 57017
+user = "hq"
+password = "hq"
+auth_source = "admin"
+database = "hqdb"
+
 [profiles.mongo-rw]
 adapter = "mongodb"
 access = "read-write"
@@ -153,6 +188,12 @@ func TestE2EListProfiles(t *testing.T) {
 	}
 	if p := got["pg-rw"]; p.Access != "read-write" {
 		t.Errorf("pg-rw = %+v, want read-write", p)
+	}
+	if p := got["pg-masked"]; !p.Masked || p.Access != "read-only" {
+		t.Errorf("pg-masked = %+v, want masked and read-only", p)
+	}
+	if p := got["pg-dev"]; p.Masked {
+		t.Errorf("pg-dev = %+v, want unmasked", p)
 	}
 }
 
