@@ -66,6 +66,26 @@ func TestDKeyDoesNothingOnMongoCollectionViaIsDDLTable(t *testing.T) {
 	}
 }
 
+// clipboardMsgOf runs cmd and returns the clipboard-setting message it
+// produces, looking inside a batch (copy batches the clipboard write with
+// its "copied N chars" notice); the notice's own tick is not run.
+func clipboardMsgOf(cmd tea.Cmd) tea.Msg {
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return msg
+	}
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		if m := c(); strings.Contains(fmt.Sprintf("%T", m), "ClipboardMsg") {
+			return m
+		}
+	}
+	return msg
+}
+
 func TestCopyActiveTabEmitsOSC52ForTheFullDDLDefinition(t *testing.T) {
 	m, _ := newPostgresTableModel()
 	m.tabs = []tab{&ddlTab{title: "pg-dev: hqdb.public.widgets (DDL)",
@@ -77,7 +97,7 @@ func TestCopyActiveTabEmitsOSC52ForTheFullDDLDefinition(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("want a non-nil Cmd")
 	}
-	msg := cmd()
+	msg := clipboardMsgOf(cmd)
 	if got := fmt.Sprintf("%T", msg); !strings.Contains(got, "ClipboardMsg") {
 		t.Errorf("Cmd produced %T, want a clipboard-setting message", msg)
 	}

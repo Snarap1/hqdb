@@ -302,7 +302,7 @@ func TestViewRendersIndentationAndLoadingSuffix(t *testing.T) {
 	root.children = []*node{{kind: kindDatabase, name: "hqdb", parent: root}}
 
 	out := ansi.Strip(tr.View(40, 10, true))
-	if !contains(out, "alpha  loading…") {
+	if !contains(out, "alpha  loading…") || !contains(out, "RO") {
 		t.Errorf("view missing loading suffix:\n%s", out)
 	}
 	if !contains(out, "   ▸ hqdb") {

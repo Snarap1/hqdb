@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Snarap1/hqdb/internal/config"
 	"github.com/Snarap1/hqdb/internal/consolestate"
@@ -33,14 +35,40 @@ type consoleCore struct {
 	editing bool // the editor, not the results, has keyboard focus
 
 	running bool
+	// runAt is when the running statement started.
+	runAt time.Time
 	// confirm holds a write statement awaiting "y" before it runs.
 	confirm writeConfirm
 	// status is the result line; err is the last statement's error.
 	status string
 	err    error
+	// errPopup shows err's full text in the cell popup (Enter on the
+	// results while an error is shown).
+	errPopup grid
+	// statusRows is how many lines the status took in the last frame,
+	// which the results area starts below.
+	statusRows int
 
 	// work tracks the running statement (and export) for Ctrl+C.
 	work cancelSet
+}
+
+// maxStatusRows is how many lines an error or refusal wraps over in the
+// status area before it is cut; the full text is in the error popup.
+const maxStatusRows = 3
+
+func (c *consoleCore) busy() bool { return c.running }
+
+func (c *consoleCore) confirmPending() bool { return c.confirm.pending() }
+
+// errPopupOpen reports whether the error popup is showing.
+func (c *consoleCore) errPopupOpen() bool { return c.errPopup.popupOpen() }
+
+// openErrPopup shows the current error's full text in the cell popup.
+func (c *consoleCore) openErrPopup() {
+	c.errPopup = newGrid([]string{"error"}, [][]any{{c.err.Error()}})
+	c.errPopup.state.popupNote = c.profile
+	c.errPopup = c.errPopup.openPopupAt(0, 0)
 }
 
 // init binds c to profile and starts it in the editor, holding the
@@ -72,7 +100,7 @@ func (c *consoleCore) Cancel() { c.work.cancelAll() }
 // editingText reports whether keys go to text input; resultsModal is the
 // results' own modal state (a grid search or popup).
 func (c *consoleCore) editingText(resultsModal bool) bool {
-	return c.editing || c.confirm.pending() || resultsModal
+	return c.editing || c.confirm.pending() || resultsModal || c.errPopupOpen()
 }
 
 // statementAt is the statement under the editor's cursor, as split picks it.
@@ -90,10 +118,10 @@ func (c *consoleCore) setAccess(a config.Access) { c.access = a }
 func (c *consoleCore) runOrAsk(stmt, violation string, run func() tea.Cmd) tea.Cmd {
 	if violation != "" && c.access != config.ReadWrite {
 		c.err, c.status = fmt.Errorf("Refused (read-only profile): %s", violation), ""
-		return nil
+		return noticeCmd("refused: " + c.profile + " is a read-only profile")
 	}
 	if violation != "" {
-		c.confirm.ask(c.profile, stmt, run)
+		c.confirm.ask(c.profile, stmt, violation, run)
 		return nil
 	}
 	return run()
@@ -102,7 +130,7 @@ func (c *consoleCore) runOrAsk(stmt, violation string, run func() tea.Cmd) tea.C
 // exec records stmt in the history, marks the Console running, and
 // returns the tea.Cmd running fn under a cancellable context.
 func (c *consoleCore) exec(stmt string, fn func(ctx context.Context) tea.Msg) tea.Cmd {
-	c.running = true
+	c.running, c.runAt = true, time.Now()
 	c.hist.record(stmt)
 	ctx, done := c.work.start()
 	return func() tea.Msg {
@@ -140,6 +168,14 @@ func (c *consoleCore) updateFront(msg tea.KeyPressMsg, keys keyMap, resultsModal
 		}
 		return cmd, true
 	}
+	if c.errPopupOpen() {
+		c.errPopup, _ = c.errPopup.update(msg, keys)
+		return nil, true
+	}
+	if !c.editing && c.err != nil && !resultsModal && key.Matches(msg, keys.CellPopup) {
+		c.openErrPopup()
+		return nil, true
+	}
 	if key.Matches(msg, keys.RunStatement) && !resultsModal {
 		return run(), true
 	}
@@ -166,7 +202,7 @@ func (c *consoleCore) Paste(text string) {
 // clickEditor focuses the editor on a click in it and reports the results
 // area's top when the click landed below it instead (ok true).
 func (c *consoleCore) clickEditor(y, height int) (top int, ok bool) {
-	_, top = consoleLayout(height)
+	_, top = consoleLayout(height, c.statusRows)
 	if y < top {
 		c.editing = y > 0 && y < top-2
 		return top, false
@@ -178,11 +214,28 @@ func (c *consoleCore) clickEditor(y, height int) (top int, ok bool) {
 // editorHelp is the help while the editor has focus; the rest of a
 // Console's help starts with resultsHelpHead.
 func (c *consoleCore) editorHelp(keys keyMap) []key.Binding {
-	return []key.Binding{keys.RunStatement, keys.NewLineBelow, keys.WordLeft, keys.WordRight, keys.MoveLineUp, keys.MoveLineDown, keys.DupLine, keys.HistoryPrev, keys.HistoryNext}
+	return []key.Binding{keys.RunStatement, hint("esc", "results"), keys.NewLineBelow, keys.WordLeft, keys.WordRight, keys.MoveLineUp, keys.MoveLineDown, keys.DupLine, keys.HistoryPrev, keys.HistoryNext}
 }
 
 func (c *consoleCore) resultsHelpHead(keys keyMap) []key.Binding {
-	return []key.Binding{keys.RunStatement, keys.EditBuffer}
+	h := []key.Binding{keys.RunStatement, keys.EditBuffer}
+	if c.err != nil {
+		h = append(h, hint(keys.CellPopup.Help().Key, "full error"))
+	}
+	return h
+}
+
+// help is the Console's status bar hints: the confirmation's keys while
+// one is pending, the editor's while it has focus, else results (the
+// Console kind's results hints after resultsHelpHead).
+func (c *consoleCore) help(keys keyMap, results []key.Binding) []key.Binding {
+	switch {
+	case c.confirm.pending():
+		return []key.Binding{hint("y", "run"), hint("any other key", "cancels")}
+	case c.editing:
+		return c.editorHelp(keys)
+	}
+	return append(c.resultsHelpHead(keys), results...)
 }
 
 // mode is the header's editing/results label with the history position,
@@ -198,36 +251,87 @@ func (c *consoleCore) mode() string {
 	return m
 }
 
-// statusLine is the confirmation prompt, the running state, the error, or
-// else idle (the Console's own status with its extras).
-func (c *consoleCore) statusLine(width int, idle func() string) string {
+// statusLines is the status area, one to maxStatusRows lines: the
+// confirmation prompt with why the statement writes, the running state,
+// the error (wrapped, and cut with a hint at the error popup when longer),
+// or else idle (the Console's own status with its extras).
+func (c *consoleCore) statusLines(width int, idle func() string) []string {
 	switch {
 	case c.confirm.pending():
-		return accentStyle.Bold(true).Render(c.confirm.prompt(width))
+		p := c.confirm.prompt(width)
+		lines := []string{accentStyle.Bold(true).Render(p[0])}
+		for _, l := range p[1:] {
+			lines = append(lines, wrapLines(mutedStyle, l, width, maxStatusRows-1, "")...)
+		}
+		return lines
 	case c.running:
-		return accentStyle.Render("Running...") + mutedStyle.Render("  ctrl+c cancels")
+		return []string{accentStyle.Render(busyText("Running", c.runAt)) + mutedStyle.Render(" · ctrl+c cancels")}
 	case c.err != nil:
-		return errorStyle.Render("Error: " + c.err.Error())
+		more := " (enter: full error)"
+		if c.editing {
+			more = " (esc, enter: full error)"
+		}
+		return wrapLines(errorStyle, "Error: "+c.err.Error(), width, maxStatusRows, more)
 	}
-	return lipgloss.NewStyle().Foreground(colorText).Render(idle())
+	return []string{lipgloss.NewStyle().Foreground(colorText).Render(idle())}
+}
+
+// wrapLines wraps text, sanitized for display, to width in style over at
+// most n lines; when it needs more, the last line is cut to end with more.
+func wrapLines(style lipgloss.Style, text string, width, n int, more string) []string {
+	width = max(width, 1)
+	lines := strings.Split(lipgloss.NewStyle().Width(width).Render(popupSafe(text)), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " ")
+	}
+	if len(lines) > n {
+		lines = lines[:n]
+		last := ansi.Truncate(lines[n-1], max(width-ansi.StringWidth(more)-1, 1), "…")
+		lines[n-1] = style.Render(last) + mutedStyle.Render(more)
+		for i := range lines[:n-1] {
+			lines[i] = style.Render(lines[i])
+		}
+		return lines
+	}
+	for i := range lines {
+		lines[i] = style.Render(lines[i])
+	}
+	return lines
 }
 
 // showResults reports whether View should render the results area.
 func (c *consoleCore) showResults(has bool) bool { return has && c.err == nil && !c.running }
 
-// frame lays a Console out: header (the Profile, sub, and the mode),
-// editor, rule, status, and results (when results is non-nil, called with
-// the area's height).
-func (c *consoleCore) frame(sub, status string, width, height int, focused bool, results func(h int) string) string {
-	editorHeight, top := consoleLayout(height)
+// frame lays a Console out: header (the Profile, its access badge, sub,
+// and the mode), editor, rule, status, and results (when results is
+// non-nil, called with the area's height). The error popup, while open,
+// is drawn over all of it.
+func (c *consoleCore) frame(sub string, status []string, width, height int, focused bool, results func(h int) string) string {
+	c.statusRows = len(status)
+	editorHeight, top := consoleLayout(height, c.statusRows)
+	clip := lipgloss.NewStyle().Inline(true).MaxWidth(max(width, 1))
 	parts := []string{
-		headerLine(width, c.profile, sub, c.mode()),
+		tabHeaderLine(width, c.access, c.profile, sub, c.mode()),
 		c.editor.view(width, editorHeight, focused && c.editing),
 		consoleRuleStyle.Render(strings.Repeat("─", max(0, width))),
-		lipgloss.NewStyle().Inline(true).MaxWidth(max(width, 1)).Render(status),
+	}
+	for _, s := range status {
+		parts = append(parts, clip.Render(s))
 	}
 	if results != nil {
 		parts = append(parts, results(height-top))
 	}
-	return strings.Join(parts, "\n")
+	out := strings.Join(parts, "\n")
+	if c.errPopupOpen() {
+		out = c.errPopup.withPopup(out, width, height)
+	}
+	return out
+}
+
+// accessText is the Console header's spelled-out access mode.
+func (c *consoleCore) accessText() string {
+	if c.access == config.ReadWrite {
+		return string(config.ReadWrite)
+	}
+	return string(config.ReadOnly)
 }

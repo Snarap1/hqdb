@@ -171,6 +171,9 @@ func (t *mongoConsoleTab) Update(msg tea.KeyPressMsg, keys keyMap, pool *connPoo
 
 // CopyText is the selected card field (or Document) or grid cell.
 func (t *mongoConsoleTab) CopyText() (string, bool) {
+	if t.errPopupOpen() {
+		return t.errPopup.cellCopyText()
+	}
 	if !t.hasDocs {
 		return "", false
 	}
@@ -221,19 +224,16 @@ func (t *mongoConsoleTab) ClickCell(x, y, width, height int, double bool) {
 }
 
 func (t *mongoConsoleTab) Help(keys keyMap) []key.Binding {
-	if t.editing {
-		return t.editorHelp(keys)
-	}
-	h := t.resultsHelpHead(keys)
-	if t.hasDocs {
+	var h []key.Binding
+	if t.hasDocs && t.err == nil {
 		if t.gridMode {
 			h = append(h, keys.gridHelp()...)
 		} else {
-			h = append(h, keys.Up, keys.Down, keys.Expand)
+			h = append(h, keys.Expand, keys.Copy, keys.pageHint())
 		}
 		h = append(h, keys.ToggleView)
 	}
-	return h
+	return t.help(keys, h)
 }
 
 func (t *mongoConsoleTab) View(width, height int, focused bool) string {
@@ -241,7 +241,7 @@ func (t *mongoConsoleTab) View(width, height int, focused bool) string {
 	if db == "" {
 		db = "(profile default)"
 	}
-	status := t.statusLine(width, func() string {
+	status := t.statusLines(width, func() string {
 		s := t.status
 		if st := t.grid.searchStatus(); t.hasDocs && t.gridMode && st != "" {
 			s += "  " + st
@@ -257,7 +257,9 @@ func (t *mongoConsoleTab) View(width, height int, focused bool) string {
 			return t.cards.cardsView(width, h, focused && !t.editing)
 		}
 	}
-	return t.frame("mongodb console · db: "+db, status, width, height, focused, results)
+	return t.frame("mongodb console · db: "+db+" · "+t.accessText(), status, width, height, focused, results)
 }
 
-func (t *mongoConsoleTab) cellPopupOpen() bool { return t.gridMode && t.grid.popupOpen() }
+func (t *mongoConsoleTab) cellPopupOpen() bool {
+	return t.errPopupOpen() || (t.gridMode && t.grid.popupOpen())
+}

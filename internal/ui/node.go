@@ -5,6 +5,7 @@ import (
 
 	"github.com/Snarap1/hqdb/internal/adapters"
 	"github.com/Snarap1/hqdb/internal/catalog"
+	"github.com/Snarap1/hqdb/internal/config"
 )
 
 // nodeKind identifies what a Catalog tree row represents.
@@ -39,6 +40,9 @@ type node struct {
 	adapter string // the Profile's Adapter, propagated to every descendant
 	path    []string
 	parent  *node
+
+	// access is a kindProfile node's access mode, for its tree badge.
+	access config.Access
 
 	// objKind marks a kindTable node as "table" or "view".
 	objKind string

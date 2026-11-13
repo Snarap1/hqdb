@@ -51,6 +51,9 @@ type gridCells struct {
 	// matchQuery and matchList memoize matches for the last search query.
 	matchQuery string
 	matchList  [][2]int
+
+	// bodyRows is how many rows the last frame showed, for PgUp and PgDn.
+	bodyRows int
 }
 
 // gridCell is one laid-out cell: its display text fitted to the column,
@@ -448,6 +451,7 @@ func (g grid) view(width, height int, focused bool) string {
 
 	var b strings.Builder
 	bodyHeight := max(height-1, 0)
+	c.bodyRows = bodyHeight
 	b.Grow((min(bodyHeight, len(c.rows)) + 1) * (used + 16*(colEnd-colStart)))
 	p := gridPaints.header
 	for i := colStart; i < colEnd; i++ {

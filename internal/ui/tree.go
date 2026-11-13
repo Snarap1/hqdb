@@ -32,6 +32,35 @@ type catalogTree struct {
 	// work tracks the tree's running loads and searches, which Ctrl+C
 	// cancels while the tree has focus.
 	work *cancelSet
+
+	// pageRows is how many rows the tree shows, which the Model sets
+	// before a key reaches Update, for PgUp and PgDn.
+	pageRows int
+}
+
+// selectProfile selects the root of the Profile named name, if there is
+// one (the config's default_profile on start).
+func (t catalogTree) selectProfile(name string) catalogTree {
+	if name == "" {
+		return t
+	}
+	for i, n := range t.visible() {
+		if n.kind == kindProfile && n.name == name {
+			t.selected = i
+		}
+	}
+	return t
+}
+
+// moveBy moves the selection by delta rows, clamped to the ends (it never
+// wraps).
+func (t catalogTree) moveBy(delta int) catalogTree {
+	rows := t.visible()
+	if len(rows) == 0 {
+		return t
+	}
+	t.selected = clampInt(clampedSelected(t.selected, rows)+delta, 0, len(rows)-1)
+	return t
 }
 
 func newCatalogTree(cfg *config.Config) catalogTree {
@@ -151,6 +180,10 @@ func (t catalogTree) Update(msg tea.Msg, keys keyMap, pool *connPool) (catalogTr
 
 	rows := t.visible()
 	t.selected = clampedSelected(t.selected, rows)
+
+	if d, ok := keys.moveBy(k, t.selected, len(rows), t.pageRows); ok {
+		return t.moveBy(d), nil
+	}
 
 	switch {
 	case key.Matches(k, keys.Up):
@@ -479,9 +512,16 @@ func treeRow(n *node, width int, selected, focused bool) string {
 	if meta != "" {
 		line += bg.Render("  ") + bg.Foreground(colorMuted).Render(meta)
 	}
-	line = lipgloss.NewStyle().Inline(true).MaxWidth(width).Render(line)
-	if gap := width - lipgloss.Width(line); gap > 0 {
+	// A Profile's access badge sits flush right, where a long name can
+	// never push it out.
+	var badge string
+	if n.kind == kindProfile && width > 8 {
+		badge = bg.Render(" ") + accessBadgeOn(n.access, bg) + bg.Render(" ")
+	}
+	room := width - lipgloss.Width(badge)
+	line = lipgloss.NewStyle().Inline(true).MaxWidth(room).Render(line)
+	if gap := room - lipgloss.Width(line); gap > 0 {
 		line += bg.Render(strings.Repeat(" ", gap))
 	}
-	return line
+	return line + badge
 }

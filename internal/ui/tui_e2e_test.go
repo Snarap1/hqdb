@@ -133,11 +133,12 @@ not_a_real_key = "x"
 `)
 	tm := startTUI(t, cfg)
 
-	// a-broken-dev sorts first, so it is selected on start and its error
-	// shows in the tab area without pressing anything. "▌✕" is the
+	// The fixture's default_profile (pg-dev) is selected on start; moving
+	// to a-broken-dev shows its error in the tab area. "▌✕" is the
 	// selection bar plus the broken marker: "▌" because it is selected,
 	// "✕" because it failed validation.
 	waitForFrameContaining(t, tm.Output(), "a-broken-dev")
+	selectNode(t, tm, "a-broken-dev")
 	screen := waitForScreen(t, tm, func(s string) bool { return strings.Contains(s, "failed validation") })
 	for _, want := range []string{
 		"▌✕ a-broken-dev  invalid",
@@ -156,7 +157,7 @@ func TestGlobalKeysToggleFocusTreeAndHelp(t *testing.T) {
 
 	// Tree is focused on start: the status bar shows the tree's own hints.
 	frame := waitForFrameContaining(t, tm.Output(), "pg-dev")
-	if !bytes.Contains(frame, []byte("select up")) {
+	if !bytes.Contains(frame, []byte("filter by name")) {
 		t.Errorf("tree-focused status bar missing its own hints:\n%s", frame)
 	}
 
@@ -165,12 +166,12 @@ func TestGlobalKeysToggleFocusTreeAndHelp(t *testing.T) {
 	// hints is what actually changes on screen, so that is what we match.
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 	waitForScreen(t, tm, func(s string) bool {
-		return strings.Contains(s, "TABS") && !strings.Contains(s, "select up")
+		return strings.Contains(s, "TABS") && !strings.Contains(s, "filter by name")
 	})
 
 	// Shift+Tab moves focus back to the tree; its hints reappear.
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	waitForFrameContaining(t, tm.Output(), "select up")
+	waitForFrameContaining(t, tm.Output(), "filter by name")
 
 	// z hides the tree entirely: a real layout change, so the tab area's
 	// placeholder is redrawn (now full width) and the tree's rows are not.
@@ -236,7 +237,7 @@ func TestExpandPostgresProfileWalksDatabaseSchemaTableColumn(t *testing.T) {
 	waitForFrameContaining(t, tm.Output(), "widgets  table")
 
 	selectNode(t, tm, "widgets")
-	enter(tm) // widgets -> Columns
+	tm.Send(tea.KeyPressMsg{Code: 'l', Text: "l"}) // widgets -> Columns (Enter opens its Data view)
 	// The tree pane is a fixed 34 columns wide, and a Column row at this
 	// adapter's depth (Profile/Database/Schema/Table/Column) is indented
 	// 8 spaces; "name  text NULL" is the one row of the three that is
@@ -273,7 +274,7 @@ func TestExpandMysqlProfileWalksDatabaseTableColumnWithNoSchemaLevel(t *testing.
 	waitForFrameContaining(t, tm.Output(), "widgets  table")
 
 	selectNode(t, tm, "widgets")
-	enter(tm) // widgets -> Columns
+	tm.Send(tea.KeyPressMsg{Code: 'l', Text: "l"}) // widgets -> Columns (Enter opens its Data view)
 	frame = waitForFrameContaining(t, tm.Output(), "NOT NULL")
 	for _, want := range []string{"id", "name", "price"} {
 		if !bytes.Contains(frame, []byte(want)) {
@@ -287,7 +288,8 @@ func TestExpandClickhouseProfileShowsDatabases(t *testing.T) {
 	tm := startTUI(t, cfg)
 	waitForFrameContaining(t, tm.Output(), "ch-dev")
 
-	enter(tm) // ch-dev sorts first: no navigation needed
+	selectNode(t, tm, "ch-dev") // the default_profile is selected on start
+	enter(tm)
 	waitForFrameContaining(t, tm.Output(), "hqdb")
 }
 
@@ -480,7 +482,8 @@ func TestDDLTabOpensNativeClickhouseTableDDL(t *testing.T) {
 	tm := startTUI(t, cfg)
 	waitForFrameContaining(t, tm.Output(), "ch-dev")
 
-	enter(tm) // ch-dev sorts first: no navigation needed -> Databases
+	selectNode(t, tm, "ch-dev") // the default_profile is selected on start
+	enter(tm)                   // -> Databases
 	waitForFrameContaining(t, tm.Output(), "hqdb")
 	selectNode(t, tm, "hqdb")
 	enter(tm) // hqdb -> Tables (clickhouse has no Schema level)
@@ -595,12 +598,12 @@ func TestMouseClickFocusesTreeOrTabArea(t *testing.T) {
 	// tree's own hints, since focus moved away from it.
 	tm.Send(tea.MouseClickMsg{X: 60, Y: 5, Button: tea.MouseLeft})
 	waitForScreen(t, tm, func(s string) bool {
-		return strings.Contains(s, "TABS") && !strings.Contains(s, "select up")
+		return strings.Contains(s, "TABS") && !strings.Contains(s, "filter by name")
 	})
 
 	// Click back inside the tree: its hints reappear.
 	tm.Send(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
-	waitForFrameContaining(t, tm.Output(), "select up")
+	waitForFrameContaining(t, tm.Output(), "filter by name")
 }
 
 // upN sends the up arrow n times; it is used to walk a tree selection back
@@ -630,7 +633,7 @@ func TestEnterOnSQLTableOpensDataViewWithFirstPage(t *testing.T) {
 	waitForFrameContaining(t, tm.Output(), "widgets  table")
 
 	selectNode(t, tm, "widgets")
-	enter(tm) // widgets -> still expands to Columns in the tree AND opens a Data view tab
+	enter(tm) // widgets -> opens its Data view tab (l lists its Columns)
 
 	// The tab title draws before the first page arrives, so wait for the
 	// whole screen to show both.
@@ -819,7 +822,8 @@ func TestTabsAcrossProfilesSwitchCloseAndClickFocus(t *testing.T) {
 	// every database on the server, not just the one the Profile is
 	// scoped to, so hqdb is not the first child: INFORMATION_SCHEMA,
 	// default, then hqdb sort ahead of it.
-	enter(tm) // ch-dev -> Databases; selection stays on ch-dev
+	selectNode(t, tm, "ch-dev") // the default_profile is selected on start
+	enter(tm)                   // ch-dev -> Databases; selection stays on ch-dev
 	waitForFrameContaining(t, tm.Output(), "hqdb")
 	selectNode(t, tm, "hqdb")
 	enter(tm) // hqdb -> Tables ("widgets  table"); selection stays on hqdb

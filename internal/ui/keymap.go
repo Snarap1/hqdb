@@ -1,6 +1,9 @@
 package ui
 
-import "charm.land/bubbles/v2/key"
+import (
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+)
 
 // keyMap is the set of key bindings this ticket implements. Later tickets
 // add more entries (catalog actions, tab management, Data view and Console
@@ -112,6 +115,16 @@ type keyMap struct {
 	MoveLineUp   key.Binding
 	MoveLineDown key.Binding
 	DupLine      key.Binding
+
+	// PageUp, PageDown, Top, and Bottom move the tree's selection, a
+	// grid's cell cursor, a card view's cursor, a DDL tab's text, and the
+	// help overlay by a screenful or to either end.
+	PageUp   key.Binding
+	PageDown key.Binding
+	Top      key.Binding
+	Bottom   key.Binding
+	// JumpTab makes tab N (alt+1 to alt+9) the active one.
+	JumpTab key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -166,7 +179,45 @@ func defaultKeyMap() keyMap {
 		MoveLineUp:   key.NewBinding(key.WithKeys("alt+up"), key.WithHelp("alt+↑", "move line up")),
 		MoveLineDown: key.NewBinding(key.WithKeys("alt+down"), key.WithHelp("alt+↓", "move line down")),
 		DupLine:      key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "duplicate line")),
+
+		PageUp:   key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
+		PageDown: key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "page down")),
+		Top:      key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g/home", "first row")),
+		Bottom:   key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "last row")),
+		JumpTab: key.NewBinding(key.WithKeys("alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9"),
+			key.WithHelp("alt+1..9", "go to tab N")),
 	}
+}
+
+// jumpTabIndex is the zero-based tab index msg jumps to (alt+1 is 0).
+func (k keyMap) jumpTabIndex(msg tea.KeyPressMsg) (int, bool) {
+	if !key.Matches(msg, k.JumpTab) {
+		return 0, false
+	}
+	s := msg.String()
+	return int(s[len(s)-1] - '1'), true
+}
+
+// moveBy is the row delta a paging key moves a list whose screen shows
+// page rows and whose cursor is at cur of total, and whether k was one.
+func (k keyMap) moveBy(msg tea.KeyPressMsg, cur, total, page int) (int, bool) {
+	page = max(page, 1)
+	switch {
+	case key.Matches(msg, k.PageUp):
+		return -page, true
+	case key.Matches(msg, k.PageDown):
+		return page, true
+	case key.Matches(msg, k.Top):
+		return -cur, true
+	case key.Matches(msg, k.Bottom):
+		return total - 1 - cur, true
+	}
+	return 0, false
+}
+
+// pageHint is the paging keys as one status bar hint.
+func (k keyMap) pageHint() key.Binding {
+	return hint("pgup/pgdn g/G", "page/ends")
 }
 
 // pagingHint is NextPage and PrevPage as one status bar hint, so the
@@ -176,24 +227,33 @@ func (k keyMap) pagingHint() key.Binding {
 		key.WithHelp(k.NextPage.Help().Key+"/"+k.PrevPage.Help().Key, "page"))
 }
 
-// globalHelp is the short global tail of the status bar; the full keymap,
-// grouped by area, lives in the help overlay (help.go).
+// globalHelp is the global tail of the status bar, reserved at its right
+// end; the full keymap, grouped by area, lives in the help overlay
+// (help.go).
 func (k keyMap) globalHelp() []key.Binding {
-	return []key.Binding{k.FocusNext, k.Help, k.Quit}
+	return []key.Binding{k.Help, k.Quit}
 }
 
-// treeHelp lists the tree pane's own bindings, shown in the status bar and
-// the help overlay while the tree is focused.
-func (k keyMap) treeHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Expand, k.TreeLeft, k.TreeRight, k.Refresh, k.Disconnect, k.Filter}
+// treeHelp lists the tree pane's own status bar hints for the selected
+// node n: Enter opens a Table's Data view and expands anything else. The
+// arrow keys are self-evident and left out.
+func (k keyMap) treeHelp(n *node) []key.Binding {
+	enter := hint("enter", "expand/collapse")
+	right := hint("→/l", "expand/child")
+	if opensData(n) {
+		enter = hint("enter", "open data")
+		if n.kind == kindTable {
+			right = hint("→/l", "columns")
+		}
+	}
+	return []key.Binding{enter, right, k.TreeLeft, k.Filter, k.Refresh, k.Disconnect, k.pageHint()}
 }
 
 // dataViewHelp lists a SQL Data view tab's own bindings, shown in the
-// status bar while it is the active tab.
+// status bar while it is the active tab. The arrow keys are self-evident
+// and left out; a status bar too narrow for every hint drops from the end.
 func (k keyMap) dataViewHelp() []key.Binding {
-	// The grid's cell keys lead: the arrow keys are self-evident, and a
-	// status bar too narrow for every hint truncates from the end.
-	return append([]key.Binding{k.pagingHint(), k.Count, k.Where, k.OrderBy, k.Search, k.CellPopup, k.Copy, k.CopyRow, k.Export, k.SearchNext, k.SearchPrev, k.PageSize}, k.Up, k.Down, k.Left, k.Right)
+	return []key.Binding{k.pagingHint(), k.Count, k.Where, k.OrderBy, k.Search, k.CellPopup, k.Copy, k.CopyRow, k.Export, k.SearchNext, k.SearchPrev, k.PageSize, k.pageHint()}
 }
 
 // mongoDataViewHelp lists a mongodb Data view tab's own bindings: the
@@ -215,5 +275,5 @@ func (k keyMap) mongoDataViewHelp(gridMode bool) []key.Binding {
 // gridHelp lists the shared grid's cell keys, leading the hints of every
 // tab kind that embeds a grid.
 func (k keyMap) gridHelp() []key.Binding {
-	return []key.Binding{k.CellPopup, k.Copy, k.CopyRow, k.Search, k.SearchNext, k.SearchPrev}
+	return []key.Binding{k.CellPopup, k.Copy, k.CopyRow, k.Search, k.SearchNext, k.SearchPrev, k.pageHint()}
 }

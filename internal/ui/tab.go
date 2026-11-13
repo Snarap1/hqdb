@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // tab is one entry of the tab area to the right of the Catalog tree. A SQL
@@ -72,35 +74,120 @@ func tabSegments(tabs []tab, active int) []tabSegment {
 	return segs
 }
 
-// renderTabBar renders every open tab, the active one highlighted, on a
-// bar exactly width cells wide with the tab keys hinted at its right end.
-func renderTabBar(tabs []tab, active int, width int) string {
-	var b strings.Builder
-	for _, s := range tabSegments(tabs, active) {
-		b.WriteString(s.text)
+// tabBarHint is the tab keys hinted at the tab bar's right end.
+const tabBarHint = " [ ] · x "
+
+// tabMarker renders the "‹ N" or "N ›" marker counting the tabs hidden on
+// one side of the tab bar's window, "" when none are.
+func tabMarker(n int, left bool) string {
+	if n == 0 {
+		return ""
 	}
-	left := b.String()
-	right := tabBarStyle.Foreground(colorMuted).Render(" [ ] · x ")
-	if len(tabs) == 0 {
-		right = ""
+	text := fmt.Sprintf(" ‹ %d ", n)
+	if !left {
+		text = fmt.Sprintf(" %d › ", n)
 	}
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 0 {
-		return lipgloss.NewStyle().Inline(true).MaxWidth(max(width, 0)).Render(left)
-	}
-	return left + tabBarStyle.Render(strings.Repeat(" ", gap)) + right
+	return tabBarStyle.Foreground(colorAccent).Bold(true).Render(text) + tabSepStyle.Render("│")
 }
 
-// tabAt returns the index of the tab whose rendered segment contains x (as
-// renderTabBar laid them out, back to back, each with its own separator), or -1 when
-// x falls past every tab.
-func tabAt(tabs []tab, active int, x int) int {
-	pos := 0
-	for i, s := range tabSegments(tabs, active) {
-		if x >= pos && x < pos+s.width {
-			return i
+// tabBarItem is one entry of the tab bar as laid out: a tab, or a hidden
+// tabs marker, which a click treats as the nearest hidden tab on its side.
+type tabBarItem struct {
+	text  string
+	width int
+	tab   int
+}
+
+// tabBarLayout lays the tab bar out for width cells: a window of tabs
+// around the active one, as many as fit, with a "‹ N" marker for the tabs
+// hidden before it and an "N ›" marker for those after, and the tab keys
+// hint at the right end whenever it fits next to the active tab. A tab
+// alone wider than the room left is cut to fit. renderTabBar and tabAt
+// both build on this, so a click always hits what was drawn.
+func tabBarLayout(tabs []tab, active, width int) (items []tabBarItem, hint string) {
+	if len(tabs) == 0 || width <= 0 {
+		return nil, ""
+	}
+	active = clampInt(active, 0, len(tabs)-1)
+	segs := tabSegments(tabs, active)
+	hint = tabBarStyle.Foreground(colorMuted).Render(tabBarHint)
+	room := width - lipgloss.Width(hint)
+	if room < min(segs[active].width, 12) {
+		hint, room = "", width
+	}
+	used := func(lo, hi int) int {
+		w := lipgloss.Width(tabMarker(lo, true)) + lipgloss.Width(tabMarker(len(segs)-hi, false))
+		for i := lo; i < hi; i++ {
+			w += segs[i].width
 		}
-		pos += s.width
+		return w
+	}
+	lo, hi := active, active+1
+	for {
+		grew := false
+		if hi < len(segs) && used(lo, hi+1) <= room {
+			hi++
+			grew = true
+		}
+		if lo > 0 && used(lo-1, hi) <= room {
+			lo--
+			grew = true
+		}
+		if !grew {
+			break
+		}
+	}
+	if m := tabMarker(lo, true); m != "" {
+		items = append(items, tabBarItem{m, lipgloss.Width(m), lo - 1})
+	}
+	for i := lo; i < hi; i++ {
+		items = append(items, tabBarItem{segs[i].text, segs[i].width, i})
+	}
+	if m := tabMarker(len(segs)-hi, false); m != "" {
+		items = append(items, tabBarItem{m, lipgloss.Width(m), hi})
+	}
+	if over := used(lo, hi) - room; over > 0 {
+		// Only the active tab is shown and it is too wide: cut it.
+		for i := range items {
+			if items[i].tab == active && items[i].text == segs[active].text {
+				w := max(items[i].width-over, 1)
+				items[i].text = ansi.Truncate(items[i].text, w, "…")
+				items[i].width = lipgloss.Width(items[i].text)
+			}
+		}
+	}
+	return items, hint
+}
+
+// renderTabBar renders a window of the open tabs around the active one,
+// highlighted, on a bar exactly width cells wide with the tab keys hinted
+// at its right end (see tabBarLayout).
+func renderTabBar(tabs []tab, active int, width int) string {
+	items, hint := tabBarLayout(tabs, active, width)
+	var b strings.Builder
+	w := 0
+	for _, it := range items {
+		b.WriteString(it.text)
+		w += it.width
+	}
+	if gap := width - w - lipgloss.Width(hint); gap > 0 {
+		b.WriteString(tabBarStyle.Render(strings.Repeat(" ", gap)))
+	}
+	b.WriteString(hint)
+	return b.String()
+}
+
+// tabAt returns the index of the tab drawn at x on a tab bar width cells
+// wide (a hidden tabs marker stands for the nearest hidden tab on its
+// side), or -1 when x falls past every tab.
+func tabAt(tabs []tab, active, width, x int) int {
+	items, _ := tabBarLayout(tabs, active, width)
+	pos := 0
+	for _, it := range items {
+		if x >= pos && x < pos+it.width {
+			return it.tab
+		}
+		pos += it.width
 	}
 	return -1
 }

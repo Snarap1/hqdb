@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -67,6 +68,18 @@ type Model struct {
 	focus      pane
 	treeHidden bool
 	showHelp   bool
+	// helpScroll is the help overlay's first shown line.
+	helpScroll int
+
+	// notice is a transient status bar message (see noticeMsg), cleared
+	// by a tick noticeTTL after it was set; noticeSeq tells the tick for
+	// the current notice from a stale one.
+	notice    string
+	noticeSeq int
+	// spinning is set while a spinner tick is scheduled (see armSpinner).
+	spinning bool
+	// quitAsk is set while "q" waits for "y" because work is running.
+	quitAsk bool
 
 	width, height int
 
@@ -83,6 +96,7 @@ type Model struct {
 // first expanded.
 func New(cfg *config.Config, opts ...Option) Model {
 	m := Model{cfg: cfg, keys: defaultKeyMap(), pool: newConnPool(cfg), tree: newCatalogTree(cfg), focus: paneTree}
+	m.tree = m.tree.selectProfile(cfg.DefaultProfile)
 	for _, o := range opts {
 		o(&m)
 	}
@@ -105,7 +119,25 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
+// Update handles msg, then reports a reconnect the work behind msg made
+// as a notice, and keeps the spinner ticking while any tab is busy.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	mm := next.(Model)
+	var cmds []tea.Cmd
+	if r, ok := msg.(reconnecter); ok && r.reconnected() != "" {
+		cmds = append(cmds, mm.setNotice("reconnected to "+r.reconnected()))
+	}
+	if tick := mm.armSpinner(); tick != nil {
+		cmds = append(cmds, tick)
+	}
+	if len(cmds) == 0 {
+		return mm, cmd
+	}
+	return mm, tea.Batch(append(cmds, cmd)...)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -114,8 +146,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		return m.handleClick(msg.Mouse())
 
+	case tea.MouseWheelMsg:
+		return m.handleWheel(msg.Mouse())
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case noticeMsg:
+		cmd := m.setNotice(msg.text)
+		return m, cmd
+
+	case noticeClearMsg:
+		if msg.seq == m.noticeSeq {
+			m.notice = ""
+		}
+		return m, nil
+
+	case spinMsg:
+		m.spinning = false
+		return m, nil
 
 	case tea.PasteMsg:
 		return m.handlePaste(msg.Content)
@@ -137,8 +186,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mongoExportMsg:
-		applyMongoExportMsg(msg)
-		return m, nil
+		cmd := m.noticeIf(applyMongoExportMsg(msg))
+		return m, cmd
 
 	case filterSearchMsg:
 		m.tree = applyFilterSearchMsg(m.tree, msg)
@@ -153,8 +202,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case exportViewMsg:
-		applyExportViewMsg(msg)
-		return m, nil
+		cmd := m.noticeIf(applyExportViewMsg(msg))
+		return m, cmd
 
 	case ddlMsg:
 		applyDDLMsg(msg)
@@ -169,8 +218,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case consoleExportMsg:
-		applyConsoleExportMsg(msg)
-		return m, nil
+		cmd := m.noticeIf(applyConsoleExportMsg(msg))
+		return m, cmd
 
 	case redisConsoleMsg:
 		applyRedisConsoleMsg(msg)
@@ -179,12 +228,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openDataView opens a new Data view tab for n (a Table or, for mongodb, a
-// Collection) and focuses it, mirroring what a confirmed double-click does
-// (spec: "Enter or double-click on a Table to open its Data view"). It is
-// a no-op for anything that is not a Table-level node or a redis key.
+// opensData reports whether activating n (Enter or a double-click) opens
+// its Data view rather than expanding it: a Table (or Collection) or a
+// redis key.
+func opensData(n *node) bool {
+	return n != nil && (n.kind == kindTable || n.kind == kindKey)
+}
+
+// openDataView opens the Data view tab for n (a Table or, for mongodb, a
+// Collection, or a redis key) and focuses it (spec: "Enter or
+// double-click on a Table to open its Data view"). When a tab for the
+// same Profile and object is already open, it focuses that one instead of
+// opening a duplicate. It is a no-op for any other node.
 func (m Model) openDataView(n *node) (Model, tea.Cmd) {
-	if n == nil || (n.kind != kindTable && n.kind != kindKey) {
+	if !opensData(n) {
 		return m, nil
 	}
 	a, ok := adapterUIs[n.adapter]
@@ -192,11 +249,39 @@ func (m Model) openDataView(n *node) (Model, tea.Cmd) {
 		return m, nil
 	}
 	t, cmd := a.openData(m.pool, n)
-	m.bindAccess(t, n.profile)
-	m.tabs = append(m.tabs, t)
-	m.activeTab = len(m.tabs) - 1
+	if !m.focusExisting(t) {
+		m.bindAccess(t, n.profile)
+		m = m.addTab(t)
+	} else {
+		cmd = nil
+	}
 	m.focus = paneMain
 	return m, cmd
+}
+
+// focusExisting makes the open tab with fresh's Heading (its kind, Profile,
+// and object) the active one and reports whether there was one; fresh,
+// never shown, then has its work cancelled. Consoles are never deduped:
+// two Consoles on one Profile are two sessions.
+func (m *Model) focusExisting(fresh tab) bool {
+	h := fresh.Heading()
+	for i, t := range m.tabs {
+		if t.Heading() == h {
+			if c, ok := fresh.(tabCanceller); ok {
+				c.Cancel()
+			}
+			m.activeTab = i
+			return true
+		}
+	}
+	return false
+}
+
+// addTab appends t and makes it the active tab.
+func (m Model) addTab(t tab) Model {
+	m.tabs = append(m.tabs, t)
+	m.activeTab = len(m.tabs) - 1
+	return m
 }
 
 // activeTabOrNil returns the currently active tab, or nil when no tabs are
@@ -294,8 +379,7 @@ func (m Model) openConsole(n *node) Model {
 	}
 	t := adapterUIs[n.profileRoot().adapter].openConsole(n, profile, m.state)
 	m.bindAccess(t, profile)
-	m.tabs = append(m.tabs, t)
-	m.activeTab = len(m.tabs) - 1
+	m = m.addTab(t)
 	m.focus = paneMain
 	return m
 }
@@ -314,14 +398,18 @@ func (m Model) bindAccess(t tab, profile string) {
 // openDDLIfTable opens a DDL tab when n is a Table with DDL (every SQL
 // Adapter; not redis or mongodb, which have no DDL concept and no key
 // bound to it either - see Model.ddlAvailable), as a new active tab
-// (spec: "d on a Table opens its DDL in a tab").
+// (spec: "d on a Table opens its DDL in a tab"), or focuses the Table's
+// DDL tab when one is already open.
 func (m *Model) openDDLIfTable(n *node) tea.Cmd {
 	if n == nil || !n.isDDLTable() {
 		return nil
 	}
 	t, cmd := openDDLCmd(m.pool, n.profile, n.adapter, n.path)
-	m.tabs = append(m.tabs, t)
-	m.activeTab = len(m.tabs) - 1
+	if m.focusExisting(t) {
+		return nil
+	}
+	m.bindAccess(t, n.profile)
+	*m = m.addTab(t)
 	return cmd
 }
 
@@ -330,6 +418,30 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// whatever has keyboard focus (even a text field).
 	if key.Matches(msg, m.keys.Cancel) {
 		m.cancelFocused()
+		return m, nil
+	}
+
+	// A pending quit question takes the next key: "y" quits, any other
+	// key keeps the program running.
+	if m.quitAsk {
+		m.quitAsk = false
+		if msg.String() == "y" {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
+	// The help overlay is modal: it scrolls, and closes on Esc, ?, or q.
+	if m.showHelp {
+		return m.updateHelp(msg), nil
+	}
+
+	// alt+1..9 jumps to a tab from anywhere, a text field included, since
+	// no field takes alt+digit as text.
+	if i, ok := m.keys.jumpTabIndex(msg); ok {
+		if i < len(m.tabs) {
+			m.activeTab, m.focus = i, paneMain
+		}
 		return m, nil
 	}
 
@@ -345,7 +457,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if msg.String() == "esc" {
-		m.showHelp = false
 		if t := m.activeTabOrNil(); t != nil {
 			t.Update(msg, m.keys, m.pool) // let a tab leave its own text field
 		}
@@ -360,9 +471,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !inTextField {
 		switch {
 		case key.Matches(msg, m.keys.Quit):
+			if m.anyBusy() {
+				m.quitAsk = true
+				return m, nil
+			}
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Help):
-			m.showHelp = !m.showHelp
+			m.showHelp, m.helpScroll = true, 0
 			return m, nil
 		case key.Matches(msg, m.keys.ToggleTree):
 			m.treeHidden = !m.treeHidden
@@ -390,42 +505,80 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			sel := m.tree.selectedNode()
 			return m, m.openDDLIfTable(sel)
 		}
-		expanding := key.Matches(msg, m.keys.Expand)
-		var sel *node
-		if expanding {
-			sel = m.tree.selectedNode()
+		// Enter on a Table (or Collection, or redis key) opens its Data
+		// view; l / → is what lists a Table's Columns.
+		if sel := m.tree.selectedNode(); key.Matches(msg, m.keys.Expand) && opensData(sel) {
+			return m.openDataView(sel)
 		}
-		var treeCmd tea.Cmd
-		m.tree, treeCmd = m.tree.Update(msg, m.keys, m.pool)
-		if !expanding {
-			return m, treeCmd
-		}
-		var dvCmd tea.Cmd
-		m, dvCmd = m.openDataView(sel)
-		return m, tea.Batch(treeCmd, dvCmd)
+		m.tree.pageRows = m.treeRows()
+		var cmd tea.Cmd
+		m.tree, cmd = m.tree.Update(msg, m.keys, m.pool)
+		return m, cmd
 	}
 
 	if t := m.activeTabOrNil(); t != nil {
 		// The cell popup is modal, but copying the value it shows is
 		// what it offers ("y copy" in its footer).
 		if c, ok := t.(copier); ok && popupOpen(t) && key.Matches(msg, m.keys.Copy) {
-			return m, copyCmd(c)
+			return m.copy(c.CopyText, copiedNotice)
 		}
 		if !t.EditingText() {
 			if c, ok := t.(copier); ok && key.Matches(msg, m.keys.Copy) {
-				return m, copyCmd(c)
+				return m.copy(c.CopyText, copiedNotice)
 			}
 			if c, ok := t.(rowCopier); ok && key.Matches(msg, m.keys.CopyRow) {
-				text, ok := c.CopyRowText()
-				if !ok {
-					return m, nil
-				}
-				return m, tea.SetClipboard(text)
+				return m.copy(c.CopyRowText, func(string) string { return "copied row" })
 			}
 		}
 		return m, t.Update(msg, m.keys, m.pool)
 	}
 	return m, nil
+}
+
+// updateHelp handles a key while the help overlay is open: the movement
+// and paging keys scroll it, and Esc, ?, or q close it.
+func (m Model) updateHelp(msg tea.KeyPressMsg) Model {
+	page := max(m.height-6, 1)
+	switch {
+	case msg.String() == "esc", key.Matches(msg, m.keys.Help), key.Matches(msg, m.keys.Quit):
+		m.showHelp = false
+	case key.Matches(msg, m.keys.Up):
+		m.helpScroll--
+	case key.Matches(msg, m.keys.Down):
+		m.helpScroll++
+	case key.Matches(msg, m.keys.PageUp):
+		m.helpScroll -= page
+	case key.Matches(msg, m.keys.PageDown):
+		m.helpScroll += page
+	case key.Matches(msg, m.keys.Top):
+		m.helpScroll = 0
+	case key.Matches(msg, m.keys.Bottom):
+		m.helpScroll = 1 << 20
+	}
+	m.helpScroll = max(m.helpScroll, 0) // renderHelp clamps the bottom
+	return m
+}
+
+// treeRows is how many rows of the tree are on screen, for its paging
+// keys.
+func (m Model) treeRows() int {
+	h := m.height - statusBarHeight - 2
+	if m.tree.filtering {
+		h--
+	}
+	return max(h, 1)
+}
+
+// copy copies what get returns via OSC52 and shows notice(text) for it;
+// a no-op when there is nothing to copy yet (spec: "the copy action emits
+// the full text via OSC52").
+func (m Model) copy(get func() (string, bool), notice func(string) string) (tea.Model, tea.Cmd) {
+	text, ok := get()
+	if !ok {
+		return m, nil
+	}
+	n := m.setNotice(notice(text))
+	return m, tea.Batch(tea.SetClipboard(text), n)
 }
 
 // handlePaste delivers pasted text to the text field with focus: the
@@ -443,17 +596,6 @@ func (m Model) handlePaste(text string) (tea.Model, tea.Cmd) {
 		p.Paste(text)
 	}
 	return m, nil
-}
-
-// copyCmd copies c's current content via OSC52; it is a no-op when the
-// tab has nothing to copy yet (spec: "the copy action emits the full text
-// via OSC52").
-func copyCmd(c copier) tea.Cmd {
-	text, ok := c.CopyText()
-	if !ok {
-		return nil
-	}
-	return tea.SetClipboard(text)
 }
 
 // otherPane returns the pane focus should move to; with only two panes,
@@ -509,12 +651,51 @@ func (m Model) handleClick(ms tea.Mouse) (tea.Model, tea.Cmd) {
 	if !isDouble {
 		return m, nil
 	}
-	sel := m.tree.selectedNode()
-	var treeCmd tea.Cmd
-	m.tree, treeCmd = m.tree.activate(m.pool)
-	var dvCmd tea.Cmd
-	m, dvCmd = m.openDataView(sel)
-	return m, tea.Batch(treeCmd, dvCmd)
+	if sel := m.tree.selectedNode(); opensData(sel) {
+		return m.openDataView(sel)
+	}
+	var cmd tea.Cmd
+	m.tree, cmd = m.tree.activate(m.pool)
+	return m, cmd
+}
+
+// wheelStep is how many rows one mouse wheel notch moves.
+const wheelStep = 3
+
+// handleWheel scrolls the pane under the pointer by wheelStep rows (the
+// tree's selection, or the active tab's cursor as its own up and down keys
+// move it) without moving keyboard focus. A tab with a text field focused
+// is left alone, so the wheel never edits text.
+func (m Model) handleWheel(ms tea.Mouse) (tea.Model, tea.Cmd) {
+	var dir int
+	switch ms.Button {
+	case tea.MouseWheelUp:
+		dir = -1
+	case tea.MouseWheelDown:
+		dir = 1
+	default:
+		return m, nil
+	}
+	if ms.Y >= m.height-statusBarHeight || m.showHelp {
+		return m, nil
+	}
+	if !m.treeHidden && ms.X < treeWidth {
+		m.tree = m.tree.moveBy(dir * wheelStep)
+		return m, nil
+	}
+	t := m.activeTabOrNil()
+	if t == nil || t.EditingText() {
+		return m, nil
+	}
+	code := tea.KeyDown
+	if dir < 0 {
+		code = tea.KeyUp
+	}
+	var cmds []tea.Cmd
+	for range wheelStep {
+		cmds = append(cmds, t.Update(tea.KeyPressMsg{Code: code}, m.keys, m.pool))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // handleMainClick focuses the main pane and, when the click landed on the
@@ -528,7 +709,7 @@ func (m Model) handleMainClick(ms tea.Mouse) (tea.Model, tea.Cmd) {
 		mainWidth -= treeWidth
 	}
 	if ms.Y == 0 && len(m.tabs) > 0 {
-		if i := tabAt(m.tabs, m.activeTab, mainX); i >= 0 {
+		if i := tabAt(m.tabs, m.activeTab, mainWidth, mainX); i >= 0 {
 			m.activeTab = i
 		}
 		m.lastClickAt = time.Time{}
@@ -581,7 +762,7 @@ func (m Model) mainContent(width, height int) string {
 	if t := m.activeTabOrNil(); t != nil {
 		content = t.View(innerW, innerH, focused)
 	} else {
-		content = mutedStyle.Render("No tabs open.")
+		content = emptyHint(m.keys)
 		if sel := m.tree.selectedNode(); sel != nil {
 			if msg := sel.brokenMessage(); msg != "" {
 				content = errorStyle.Width(innerW).Render(msg)
@@ -599,26 +780,80 @@ func (m Model) mainContent(width, height int) string {
 // active tab's own Help() while the main pane is focused and a tab is
 // open, or none.
 func (m Model) paneHelp() []key.Binding {
+	if m.showHelp {
+		return []key.Binding{hint("↑↓ pgup/pgdn", "scroll"), hint("esc", "close")}
+	}
 	if m.focus == paneTree {
-		// DDL and Console go right after the navigation/expand keys so a
+		// DDL and Console go right after the open/expand keys so a
 		// truncated hint line drops Refresh/Disconnect first.
-		h := m.keys.treeHelp()
-		out := append([]key.Binding{}, h[:3]...)
+		h := m.keys.treeHelp(m.tree.selectedNode())
+		out := append([]key.Binding{}, h[:1]...)
 		if m.ddlAvailable() {
 			out = append(out, m.keys.DDL)
 		}
 		if consoleProfile(m.tree.selectedNode()) != "" {
 			out = append(out, m.keys.Console)
 		}
-		return append(out, h[3:]...)
+		return append(append(out, h[1:]...), m.keys.FocusNext)
 	}
 	if t := m.activeTabOrNil(); t != nil {
 		if popupOpen(t) {
-			return []key.Binding{m.keys.Copy, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close"))}
+			return []key.Binding{m.keys.Copy, hint("esc", "close")}
 		}
-		return t.Help(m.keys)
+		return append(t.Help(m.keys), m.keys.FocusNext)
 	}
-	return nil
+	return []key.Binding{m.keys.FocusNext}
+}
+
+// hint is a status bar or help entry that is not a binding of its own.
+func hint(keys, desc string) key.Binding {
+	return key.NewBinding(key.WithKeys(keys), key.WithHelp(keys, desc))
+}
+
+// emptyHint is the tab area's content while no tab is open: the few keys
+// that get a session going.
+func emptyHint(k keyMap) string {
+	lines := []string{mutedStyle.Render("No tabs open."), ""}
+	for _, b := range []key.Binding{
+		hint("enter", "open a Table's Data view (on a Profile: expand)"),
+		hint(k.Console.Help().Key, "open a Console on the selected Profile"),
+		hint(k.Filter.Help().Key, "filter the tree by name"),
+		hint(k.Help.Help().Key, "all keys"),
+	} {
+		lines = append(lines, "  "+accentStyle.Width(7).Render(b.Help().Key)+mutedStyle.Render(b.Help().Desc))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// confirmer is implemented by a tab that can be waiting for a write
+// confirmation's answer.
+type confirmer interface {
+	confirmPending() bool
+}
+
+// helpFirst names the help overlay group for what has focus, which the
+// overlay shows first.
+func (m Model) helpFirst() string {
+	if m.focus == paneTree {
+		return "TREE"
+	}
+	t := m.activeTabOrNil()
+	if t == nil {
+		return "TABS"
+	}
+	switch t.(type) {
+	case *dataViewTab:
+		return "DATA VIEW"
+	case *mongoTab:
+		return "MONGODB"
+	case *ddlTab:
+		return "DDL"
+	case *redisKeyTab, *redisConsoleTab:
+		return "REDIS"
+	case *mongoConsoleTab:
+		return "MONGODB"
+	}
+	return "CONSOLE"
 }
 
 // ddlAvailable reports whether the DDL action applies to the selected
@@ -653,12 +888,14 @@ func (m Model) View() tea.View {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, m.mainContent(mainWidth, contentHeight))
 	}
 
-	hints := append(m.paneHelp(), m.keys.globalHelp()...)
-	status := renderStatusBar(m.width, m.mode(), hints, m.tree.filterQuery)
-	content := body + "\n" + status
+	sb := statusBar{mode: m.mode(), filter: m.tree.filterQuery, notice: m.notice, hints: m.paneHelp(), global: m.keys.globalHelp()}
+	if m.quitAsk {
+		sb.notice, sb.hints = "quit? a query/export is running - y quits", []key.Binding{hint("any other key", "keeps running")}
+	}
+	content := body + "\n" + sb.render(m.width)
 
 	if m.showHelp {
-		content = overlay(content, renderHelp(m.width, m.height, m.keys), m.width, m.height)
+		content = overlay(content, renderHelp(m.width, m.height-statusBarHeight, m.keys, m.helpFirst(), m.helpScroll), m.width, m.height)
 	}
 
 	v.SetContent(content)
@@ -670,6 +907,8 @@ func (m Model) View() tea.View {
 // INSERT while a Console's editor or a tab's text field takes the keys.
 func (m Model) mode() string {
 	switch {
+	case m.quitAsk:
+		return "QUIT"
 	case m.showHelp:
 		return "HELP"
 	case m.focus == paneTree && m.tree.filtering:
@@ -683,6 +922,9 @@ func (m Model) mode() string {
 	}
 	if popupOpen(t) {
 		return "CELL"
+	}
+	if c, ok := t.(confirmer); ok && c.confirmPending() {
+		return "CONFIRM"
 	}
 	if t.EditingText() {
 		return "INSERT"

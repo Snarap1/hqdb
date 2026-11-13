@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -21,6 +23,9 @@ import (
 // gridState is the grid's modal state: the popup and the search field.
 type gridState struct {
 	popup bool
+	// popupNote replaces the popup title's "row N" when set (the error
+	// popup names its Profile instead).
+	popupNote string
 
 	searching   bool   // the search field has keyboard focus
 	searchInput string // text typed into the field so far
@@ -124,6 +129,46 @@ func popupText(v any) string {
 		}
 	}
 	return cellText(v)
+}
+
+// popupTabWidth is how many columns a tab advances to in the popup.
+const popupTabWidth = 4
+
+// popupSafe is text as the cell popup (or a wrapped status) shows it: line
+// breaks kept (\r\n and a lone \r become \n), a tab expanded to the next
+// multiple of popupTabWidth columns, and every other C0 or C1 control
+// character (ESC above all) and invalid UTF-8 replaced by U+FFFD, so a
+// value can never send an escape sequence to the terminal.
+func popupSafe(text string) string {
+	if isDisplaySafe(text) {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	col := 0
+	for i := 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		switch {
+		case r == '\r' && strings.HasPrefix(text[i+1:], "\n"):
+			b.WriteByte('\n')
+			size, col = 2, 0
+		case r == '\n' || r == '\r':
+			b.WriteByte('\n')
+			col = 0
+		case r == '\t':
+			n := popupTabWidth - col%popupTabWidth
+			b.WriteString(strings.Repeat(" ", n))
+			col += n
+		case r == utf8.RuneError && size == 1, unicode.IsControl(r):
+			b.WriteRune(utf8.RuneError)
+			col++
+		default:
+			b.WriteString(text[i : i+size])
+			col++
+		}
+		i += size
+	}
+	return b.String()
 }
 
 // matches lists every cell containing the applied search query,
@@ -246,6 +291,11 @@ func (g grid) update(k tea.KeyPressMsg, keys keyMap) (grid, bool) {
 		}
 		return g, true
 	}
+	if g.cells != nil && len(g.rows) > 0 {
+		if d, ok := keys.moveBy(k, g.cursorRow, len(g.rows), g.cells.bodyRows); ok {
+			return g.moveCursor(d, 0), true
+		}
+	}
 	switch {
 	case key.Matches(k, keys.Up):
 		g = g.moveCursor(-1, 0)
@@ -318,10 +368,16 @@ var popupStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderFore
 func (g grid) popupView(width, height int) string {
 	v, _ := g.currentCell()
 	inner := max(min(width-6, 96), 10)
-	text := popupText(v)
-	isJSON := text != cellText(v) || strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[")
+	raw := popupText(v)
+	isJSON := raw != cellText(v) || strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[")
+	// Only what is shown is sanitized; copy ("y") keeps the raw value.
+	text := popupSafe(raw)
 
-	title := spread(inner, brightStyle.Render(g.columns[g.cursorCol]), mutedStyle.Render(fmt.Sprintf("row %d", g.cursorRow+1)))
+	note := fmt.Sprintf("row %d", g.cursorRow+1)
+	if g.state.popupNote != "" {
+		note = g.state.popupNote
+	}
+	title := spread(inner, brightStyle.Render(displayText(g.columns[g.cursorCol])), mutedStyle.Render(displayText(note)))
 	footer := keyHint(key.NewBinding(key.WithHelp("y", "copy"))) + "   " + keyHint(key.NewBinding(key.WithHelp("esc", "close")))
 
 	src := strings.Split(text, "\n")

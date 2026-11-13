@@ -90,7 +90,7 @@ func TestRedisConsoleRunsReadsFreelyAndConfirmsWrites(t *testing.T) {
 	// usable afterwards.
 	runRedisLine(tm, "BLPOP aaatui18:never 0")
 	confirmWrite(t, tm)
-	waitForFrameContaining(t, tm.Output(), "Running...")
+	waitForFrameContaining(t, tm.Output(), "Running ")
 	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	waitForFrameContaining(t, tm.Output(), "command cancelled")
 	runRedisLine(tm, "GET "+str)

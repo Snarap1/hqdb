@@ -13,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/Snarap1/hqdb/internal/adapters"
+	"github.com/Snarap1/hqdb/internal/config"
 	"github.com/Snarap1/hqdb/internal/values"
 )
 
@@ -36,7 +37,15 @@ type redisKeyTab struct {
 	// cancelled is set when Ctrl+C stopped the load.
 	cancelled bool
 	work      cancelSet
+	// access is the Profile's access mode, for the header badge; loadAt
+	// is when the load started.
+	access config.Access
+	loadAt time.Time
 }
+
+func (t *redisKeyTab) setAccess(a config.Access) { t.access = a }
+
+func (t *redisKeyTab) busy() bool { return t.loading }
 
 // Cancel cancels the running key load (Ctrl+C).
 func (t *redisKeyTab) Cancel() { t.work.cancelAll() }
@@ -67,7 +76,7 @@ type redisKeyMsg struct {
 // cached connection is retried once after Reopen.
 func openRedisKeyCmd(pool *connPool, profile string, path []string) (*redisKeyTab, tea.Cmd) {
 	key := strings.Join(path, ":")
-	t := &redisKeyTab{title: profile + ": " + key, profile: profile, key: key, loading: true}
+	t := &redisKeyTab{title: profile + ": " + key, profile: profile, key: key, loading: true, loadAt: time.Now()}
 	ctx, done := t.work.start()
 	cmd := func() tea.Msg {
 		defer done()
@@ -297,7 +306,7 @@ func (t *redisKeyTab) ClickCell(x, y, width, height int, double bool) {
 
 func (t *redisKeyTab) Help(keys keyMap) []key.Binding {
 	if t.isGrid() {
-		return []key.Binding{keys.CellPopup, keys.Copy, keys.CopyRow, keys.Search}
+		return []key.Binding{keys.CellPopup, keys.Copy, keys.CopyRow, keys.Search, keys.pageHint()}
 	}
 	return []key.Binding{keys.Copy}
 }
@@ -310,17 +319,17 @@ func (t *redisKeyTab) Update(k tea.KeyPressMsg, keys keyMap, _ *connPool) tea.Cm
 }
 
 func (t *redisKeyTab) View(width, height int, focused bool) string {
-	header := headerLine(width, t.key, t.profile, "")
+	header := tabHeaderLine(width, t.access, t.key, t.profile, "")
 	switch {
 	case t.loading:
-		return header + "\n" + mutedStyle.Render("Loading...")
+		return header + "\n" + mutedStyle.Render(busyText("Loading", t.loadAt))
 	case t.cancelled:
 		return header + "\n" + accentStyle.Render(t.title+": load cancelled")
 	case t.err != nil:
 		return header + "\n\n" + errorStyle.Width(max(width, 1)).Render(fmt.Sprintf("%s failed to load:\n\n%v", t.title, t.err))
 	}
 	if !t.isGrid() {
-		return header + "\n" + t.val.header() + "\n\n" + lipgloss.NewStyle().Width(max(width, 1)).Render(t.val.text)
+		return header + "\n" + t.val.header() + "\n\n" + lipgloss.NewStyle().Width(max(width, 1)).Render(popupSafe(t.val.text))
 	}
 	meta := spread(width, t.val.header(), mutedStyle.Render(t.grid.searchStatus()))
 	return header + "\n" + meta + "\n" + t.grid.view(width, height-redisKeyGridTop, focused)

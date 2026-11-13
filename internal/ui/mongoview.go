@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/Snarap1/hqdb/internal/adapters"
+	"github.com/Snarap1/hqdb/internal/config"
 	"github.com/Snarap1/hqdb/internal/export"
 	"github.com/Snarap1/hqdb/internal/mongocmd"
 	"github.com/Snarap1/hqdb/internal/mongoshell"
@@ -29,6 +31,11 @@ import (
 type mongoTab struct {
 	profile string
 	path    []string
+	// access is the Profile's access mode, for the header badge only: the
+	// Data view never writes.
+	access config.Access
+	// loadAt and exportAt are when the running load and export started.
+	loadAt, exportAt time.Time
 
 	pageSize int
 
@@ -72,6 +79,11 @@ type mongoTab struct {
 	work   cancelSet
 	notice string
 }
+
+func (t *mongoTab) setAccess(a config.Access) { t.access = a }
+
+// busy reports whether a page load, count, or export is running.
+func (t *mongoTab) busy() bool { return t.loading || t.counting || t.exportCancel != nil }
 
 // Cancel cancels the tab's running page load, count, and export (Ctrl+C).
 func (t *mongoTab) Cancel() {
@@ -139,7 +151,7 @@ func runMongo(ctx context.Context, pool *connPool, profile string, req mongocmd.
 // loadCmd marks the tab loading and returns the tea.Cmd that fetches its
 // current page.
 func (t *mongoTab) loadCmd(pool *connPool) tea.Cmd {
-	t.loading = true
+	t.loading, t.loadAt = true, time.Now()
 	t.notice = ""
 	req, err := t.request("find")
 	req.Limit, req.Skip = t.pageSize, t.skip
@@ -234,6 +246,7 @@ type mongoExportMsg struct {
 	tab     *mongoTab
 	seq     int
 	format  string
+	dest    string
 	written int
 	err     error
 }
@@ -253,7 +266,7 @@ func (t *mongoTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
 	}
 	t.cancelExport()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.exportCancel = cancel
+	t.exportCancel, t.exportAt = cancel, time.Now()
 	t.exportStatus = "exporting..."
 	t.exportSeq++
 	profile, seq := t.profile, t.exportSeq
@@ -275,7 +288,7 @@ func (t *mongoTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
 		if ctx.Err() != nil {
 			err = errCancelled
 		}
-		return mongoExportMsg{tab: t, seq: seq, format: format, written: n, err: err}
+		return mongoExportMsg{tab: t, seq: seq, format: format, dest: destPath, written: n, err: err}
 	}
 }
 
@@ -286,17 +299,20 @@ func (t *mongoTab) cancelExport() {
 	}
 }
 
-func applyMongoExportMsg(msg mongoExportMsg) {
+// applyMongoExportMsg writes an export's outcome into its tab and returns
+// the notice for a finished one, "" otherwise.
+func applyMongoExportMsg(msg mongoExportMsg) string {
 	t := msg.tab
 	if msg.seq != t.exportSeq {
-		return
+		return ""
 	}
 	t.exportCancel = nil
 	if msg.err != nil {
 		t.exportStatus = "export failed: " + msg.err.Error()
-		return
+		return ""
 	}
 	t.exportStatus = fmt.Sprintf("export (%s): %d documents written", msg.format, msg.written)
+	return exportedNotice(msg.written, "documents", msg.dest)
 }
 
 // ---- value rendering ----------------------------------------------------
@@ -465,6 +481,8 @@ type docCards struct {
 	// nested fields, keyed by cardKey.
 	cursor   int
 	expanded map[string]bool
+	// pageRows is how many lines the last frame showed, for PgUp and PgDn.
+	pageRows int
 }
 
 func newDocCards() docCards { return docCards{expanded: map[string]bool{}} }
@@ -541,6 +559,7 @@ func (t *docCards) renderCardLine(l cardLine, styled bool) string {
 }
 
 func (t *docCards) cardsView(width, height int, focused bool) string {
+	t.pageRows = height
 	lines := t.cardLines()
 	top := scrollTopFor(t.cursor, len(lines), height)
 	bottom := len(lines)
@@ -577,6 +596,12 @@ func (t *docCards) toggleCursorLine() {
 // update moves the card cursor or toggles the nested field under it,
 // reporting whether k was one of those keys.
 func (t *docCards) update(k tea.KeyPressMsg, keys keyMap) bool {
+	if n := len(t.cardLines()); n > 0 {
+		if d, ok := keys.moveBy(k, t.cursor, n, t.pageRows); ok {
+			t.cursor = clampInt(t.cursor+d, 0, n-1)
+			return true
+		}
+	}
 	switch {
 	case key.Matches(k, keys.Up):
 		if t.cursor > 0 {
@@ -724,9 +749,9 @@ func (t *mongoTab) fieldsLine(width int) string {
 func (t *mongoTab) topLines(width int) []string {
 	badge := t.indicator()
 	if t.loading {
-		badge = "loading..."
+		badge = busyText("loading", t.loadAt)
 	}
-	header := headerLine(width, strings.Join(t.path, "."), t.profile+" · mongodb", badgeStyle.Render(badge))
+	header := tabHeaderLine(width, t.access, strings.Join(t.path, "."), t.profile+" · mongodb", badgeStyle.Render(badge))
 	lines := []string{header, t.fieldsLine(width)}
 	if t.fieldErr != "" {
 		lines = append(lines, errorStyle.Render("error: "+t.fieldErr))
@@ -746,7 +771,11 @@ func (t *mongoTab) View(width, height int, focused bool) string {
 	if t.gridMode {
 		view, search = "grid", t.grid.searchStatus()
 	}
-	footer := footerLine(width, t.notice, search, t.exportStatus, t.editingPageSize, t.pageSizeInput, t.pageSize, "view: "+view)
+	export := t.exportStatus
+	if t.exportCancel != nil {
+		export = busyText("exporting", t.exportAt) + " · ctrl+c cancels"
+	}
+	footer := footerLine(width, t.notice, search, export, t.editingPageSize, t.pageSizeInput, t.pageSize, "view: "+view)
 	var body string
 	switch {
 	case t.err != nil:

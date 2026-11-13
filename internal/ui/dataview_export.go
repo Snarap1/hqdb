@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -16,6 +17,7 @@ type exportViewMsg struct {
 	tab     *dataViewTab
 	seq     int
 	format  string
+	dest    string
 	written int
 	err     error
 	// cancelled is set when Ctrl+C stopped the export.
@@ -44,7 +46,7 @@ func (d *dataViewTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
 	}
 	d.cancelExport()
 	ctx, cancel := context.WithCancel(context.Background())
-	d.exportCancel = cancel
+	d.exportCancel, d.exportAt = cancel, time.Now()
 	d.exportStatus = "exporting..."
 	d.notice = ""
 	d.exportSeq++
@@ -60,7 +62,7 @@ func (d *dataViewTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
 			return exportViewMsg{tab: d, seq: seq, format: format, err: fmt.Errorf("export is not available for %s", conn.Kind())}
 		}
 		n, err := export.Query(ctx, sqlConn.SQL(), sqlText, destPath, format, 0, nil)
-		return exportViewMsg{tab: d, seq: seq, format: format, written: n, err: err, cancelled: ctx.Err() != nil}
+		return exportViewMsg{tab: d, seq: seq, format: format, dest: destPath, written: n, err: err, cancelled: ctx.Err() != nil}
 	}
 }
 
@@ -73,20 +75,22 @@ func (d *dataViewTab) cancelExport() {
 }
 
 // applyExportViewMsg writes an export's outcome into its tab's status,
-// unless a newer export has started since (its outcome would be stale).
-func applyExportViewMsg(msg exportViewMsg) {
+// unless a newer export has started since (its outcome would be stale),
+// and returns the notice for a finished one, "" otherwise.
+func applyExportViewMsg(msg exportViewMsg) string {
 	d := msg.tab
 	if msg.seq != d.exportSeq {
-		return
+		return ""
 	}
 	d.exportCancel = nil
 	if msg.cancelled {
 		d.exportStatus = "export cancelled"
-		return
+		return ""
 	}
 	if msg.err != nil {
 		d.exportStatus = "export failed: " + msg.err.Error()
-		return
+		return ""
 	}
 	d.exportStatus = fmt.Sprintf("export (%s): %d rows written", msg.format, msg.written)
+	return exportedNotice(msg.written, "rows", msg.dest)
 }

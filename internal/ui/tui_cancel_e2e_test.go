@@ -26,7 +26,7 @@ func TestCtrlCCancelsConsoleStatementAndConsoleStaysUsable(t *testing.T) {
 	// No default timeout: a statement that takes a while still finishes.
 	typeText(tm, "SELECT pg_sleep(2), 'slept' || 'ok' AS s;")
 	altEnter(tm)
-	waitForFrameContaining(t, tm.Output(), "Running...")
+	waitForFrameContaining(t, tm.Output(), "Running ")
 	start := time.Now()
 	waitForFrameContaining(t, tm.Output(), "sleptok")
 	if time.Since(start) < time.Second {
@@ -34,7 +34,7 @@ func TestCtrlCCancelsConsoleStatementAndConsoleStaysUsable(t *testing.T) {
 	}
 
 	runInConsole(tm, "SELECT pg_sleep(60)")
-	waitForFrameContaining(t, tm.Output(), "Running...")
+	waitForFrameContaining(t, tm.Output(), "Running ")
 	start = time.Now()
 	ctrlC(tm)
 	// waitForFrame gives up after 5s, far below the 60s statement.
@@ -100,7 +100,7 @@ func TestCtrlCCancelsDataViewPageCountAndExport(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: 'f', Text: "f"})
 	typeText(tm, "pg_sleep(60) IS NOT NULL")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitForText(t, tm, "loading...")
+	waitForText(t, tm, "loading ")
 	ctrlC(tm)
 	waitForText(t, tm, "page load cancelled")
 
@@ -112,7 +112,7 @@ func TestCtrlCCancelsDataViewPageCountAndExport(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	typeText(tm, filepath.Join(t.TempDir(), "out.csv"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitForText(t, tm, "exporting...")
+	waitForText(t, tm, "exporting ")
 	ctrlC(tm)
 	waitForText(t, tm, "export cancelled")
 

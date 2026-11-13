@@ -178,7 +178,12 @@ type consoleTab struct {
 	exporting    bool
 	exportInput  string
 	exportStatus string
+	// exportRunning is set while an export runs, since exportAt.
+	exportRunning bool
+	exportAt      time.Time
 }
+
+func (t *consoleTab) busy() bool { return t.running || t.exportRunning }
 
 func newConsoleTab(profile, database string, state *consolestate.Store) *consoleTab {
 	t := &consoleTab{session: &consoleSession{profile: profile, database: database}}
@@ -212,6 +217,7 @@ type consoleMsg struct {
 type consoleExportMsg struct {
 	tab          *consoleTab
 	format       string
+	dest         string
 	written      int
 	err          error
 	cancelled    bool
@@ -227,16 +233,20 @@ func cancelledText(what string, sessionReset bool) string {
 	return what + " cancelled"
 }
 
-func applyConsoleExportMsg(msg consoleExportMsg) {
+// applyConsoleExportMsg writes an export's outcome into its Console and
+// returns the notice for a finished one, "" otherwise.
+func applyConsoleExportMsg(msg consoleExportMsg) string {
+	msg.tab.exportRunning = false
 	if msg.cancelled {
 		msg.tab.exportStatus = cancelledText("export", msg.sessionReset)
-		return
+		return ""
 	}
 	if msg.err != nil {
 		msg.tab.exportStatus = "export failed: " + msg.err.Error()
-		return
+		return ""
 	}
 	msg.tab.exportStatus = fmt.Sprintf("export (%s): %d rows written", msg.format, msg.written)
+	return exportedNotice(msg.written, "rows", msg.dest)
 }
 
 func applyConsoleMsg(msg consoleMsg) {
@@ -324,12 +334,13 @@ func (t *consoleTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
 		return nil
 	}
 	t.exportStatus = "exporting..."
+	t.exportRunning, t.exportAt = true, time.Now()
 	s, stmt := t.session, t.lastStmt
 	ctx, done := t.work.start()
 	return func() tea.Msg {
 		defer done()
 		n, reset, err := s.export(ctx, pool, stmt, destPath, format)
-		return consoleExportMsg{tab: t, format: format, written: n, err: err, cancelled: ctx.Err() != nil, sessionReset: reset}
+		return consoleExportMsg{tab: t, format: format, dest: destPath, written: n, err: err, cancelled: ctx.Err() != nil, sessionReset: reset}
 	}
 }
 
@@ -372,7 +383,7 @@ func (t *consoleTab) Update(msg tea.KeyPressMsg, keys keyMap, pool *connPool) te
 		// Refuse before asking for a path that could not be used.
 		if r := t.exportRefusal(); r != "" {
 			t.exportStatus = r
-			return nil
+			return noticeCmd("export refused: the statement writes")
 		}
 		t.exporting, t.exportInput = true, ""
 	}
@@ -389,8 +400,12 @@ func (t *consoleTab) Paste(text string) {
 	t.consoleCore.Paste(text)
 }
 
-// CopyText is the current result cell, for the global copy key.
+// CopyText is the error popup's full error, or the current result cell,
+// for the global copy key.
 func (t *consoleTab) CopyText() (string, bool) {
+	if t.errPopupOpen() {
+		return t.errPopup.cellCopyText()
+	}
 	if !t.hasGrid {
 		return "", false
 	}
@@ -406,10 +421,12 @@ func (t *consoleTab) CopyRowText() (string, bool) {
 }
 
 // consoleLayout splits the content height into the editor's height and the
-// grid's top offset (header line, editor, separator, status line).
-func consoleLayout(height int) (editorHeight, gridTop int) {
+// grid's top offset (header line, editor, separator, statusRows status
+// lines). The editor's height does not depend on statusRows, so a wrapped
+// error never moves the editor.
+func consoleLayout(height, statusRows int) (editorHeight, gridTop int) {
 	editorHeight = max(3, (height-3)*2/5)
-	return editorHeight, editorHeight + 3
+	return editorHeight, editorHeight + 2 + max(statusRows, 1)
 }
 
 // clickGrid moves g's cursor to the clicked cell below top, or opens its
@@ -438,37 +455,38 @@ func (t *consoleTab) ClickCell(x, y, width, height int, double bool) {
 }
 
 func (t *consoleTab) Help(keys keyMap) []key.Binding {
-	if t.editing {
-		return t.editorHelp(keys)
+	var results []key.Binding
+	if t.hasGrid && t.err == nil {
+		results = append(keys.gridHelp(), keys.Export)
 	}
-	h := t.resultsHelpHead(keys)
-	if t.hasGrid {
-		h = append(append(h, keys.gridHelp()...), keys.Export)
-	}
-	return h
+	return t.help(keys, results)
 }
 
 var consoleRuleStyle = lipgloss.NewStyle().Foreground(colorBorder)
 
 func (t *consoleTab) View(width, height int, focused bool) string {
-	status := t.statusLine(width, func() string {
+	status := t.statusLines(width, func() string {
 		s := t.status
 		if st := t.grid.searchStatus(); t.hasGrid && st != "" {
 			s += "  " + st
 		}
-		if t.exportStatus != "" {
+		if t.exportRunning {
+			s += "  " + busyText("exporting", t.exportAt) + " · ctrl+c cancels"
+		} else if t.exportStatus != "" {
 			s += "  " + t.exportStatus
 		}
 		return s
 	})
 	if t.exporting && !t.confirm.pending() {
-		status = fieldText(width, "e", "export to (.csv/.json/.ndjson)", t.exportInput, true)
+		status = []string{fieldText(width, "e", "export to (.csv/.json/.ndjson)", t.exportInput, true)}
 	}
 	var results func(int) string
 	if t.showResults(t.hasGrid) {
 		results = func(h int) string { return t.grid.view(width, h, focused && !t.editing) }
 	}
-	return t.frame("SQL console · own session · autocommit", status, width, height, focused, results)
+	return t.frame("SQL console · own session · autocommit · "+t.accessText(), status, width, height, focused, results)
 }
 
-func (t *consoleTab) cellPopupOpen() bool { return t.hasGrid && t.grid.popupOpen() }
+func (t *consoleTab) cellPopupOpen() bool {
+	return t.errPopupOpen() || (t.hasGrid && t.grid.popupOpen())
+}

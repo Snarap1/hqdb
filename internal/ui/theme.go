@@ -6,6 +6,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/Snarap1/hqdb/internal/config"
 )
 
 // The palette is the GitHub-dark scheme of docs/ui/TUI database client.html
@@ -34,7 +36,39 @@ var (
 	colorLight   = lipgloss.Color("#a5d6ff")
 	colorRed     = lipgloss.Color("#ff7b72")
 	colorPurple  = lipgloss.Color("#d2a8ff")
+	// colorWarn marks what can write: a read-write Profile's badge.
+	colorWarn = lipgloss.Color("#f0883e")
 )
+
+var (
+	roBadgeStyle = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true)
+	rwBadgeStyle = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
+)
+
+// accessBadge is a Profile's access mode as a short badge: a quiet "RO"
+// for read-only (the default, also for the zero Access) and a warn-colored
+// "RW" for read-write.
+func accessBadge(a config.Access) string {
+	return accessBadgeOn(a, lipgloss.NewStyle())
+}
+
+// accessBadgeOn is accessBadge on bg's background (a selected tree row).
+func accessBadgeOn(a config.Access, bg lipgloss.Style) string {
+	if a == config.ReadWrite {
+		return rwBadgeStyle.Background(bg.GetBackground()).Render("RW")
+	}
+	return roBadgeStyle.Background(bg.GetBackground()).Render("RO")
+}
+
+// tabHeaderLine is headerLine with the tab's Profile access badge after
+// the sub.
+func tabHeaderLine(width int, access config.Access, title, sub, right string) string {
+	left := brightStyle.Render(title)
+	if sub != "" {
+		left += "  " + mutedStyle.Render(sub)
+	}
+	return spread(width, left+"  "+accessBadge(access), right)
+}
 
 var (
 	mutedStyle  = lipgloss.NewStyle().Foreground(colorMuted)

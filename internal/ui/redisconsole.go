@@ -227,6 +227,9 @@ func (t *redisConsoleTab) Update(msg tea.KeyPressMsg, keys keyMap, pool *connPoo
 
 // CopyText is the current reply cell, for the global copy key.
 func (t *redisConsoleTab) CopyText() (string, bool) {
+	if t.errPopupOpen() {
+		return t.errPopup.cellCopyText()
+	}
 	if !t.hasGrid {
 		return "", false
 	}
@@ -252,18 +255,15 @@ func (t *redisConsoleTab) ClickCell(x, y, width, height int, double bool) {
 }
 
 func (t *redisConsoleTab) Help(keys keyMap) []key.Binding {
-	if t.editing {
-		return t.editorHelp(keys)
+	var h []key.Binding
+	if t.hasGrid && t.err == nil {
+		h = keys.gridHelp()
 	}
-	h := t.resultsHelpHead(keys)
-	if t.hasGrid {
-		h = append(h, keys.gridHelp()...)
-	}
-	return h
+	return t.help(keys, h)
 }
 
 func (t *redisConsoleTab) View(width, height int, focused bool) string {
-	status := t.statusLine(width, func() string {
+	status := t.statusLines(width, func() string {
 		s := t.status
 		if st := t.grid.searchStatus(); t.hasGrid && st != "" {
 			s += "  " + st
@@ -274,7 +274,9 @@ func (t *redisConsoleTab) View(width, height int, focused bool) string {
 	if t.showResults(t.hasGrid) {
 		results = func(h int) string { return t.grid.view(width, h, focused && !t.editing) }
 	}
-	return t.frame("redis console", status, width, height, focused, results)
+	return t.frame("redis console · "+t.accessText(), status, width, height, focused, results)
 }
 
-func (t *redisConsoleTab) cellPopupOpen() bool { return t.hasGrid && t.grid.popupOpen() }
+func (t *redisConsoleTab) cellPopupOpen() bool {
+	return t.errPopupOpen() || (t.hasGrid && t.grid.popupOpen())
+}

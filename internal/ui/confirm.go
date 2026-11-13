@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // writeConfirm is a Console's pending write confirmation (ADR-0003: on a
@@ -14,13 +15,17 @@ import (
 type writeConfirm struct {
 	profile   string
 	statement string
-	run       func() tea.Cmd
+	// reason is why the statement counts as a write: the detector's
+	// violation (readonly.Violation, rediscmd.CommandViolation,
+	// mongocmd.OperationViolation or PipelineViolation).
+	reason string
+	run    func() tea.Cmd
 }
 
-// ask arms the confirmation for statement on profile; run starts it and
-// is called only on "y".
-func (c *writeConfirm) ask(profile, statement string, run func() tea.Cmd) {
-	c.profile, c.statement, c.run = profile, statement, run
+// ask arms the confirmation for statement on profile, which the detector
+// flagged for reason; run starts it and is called only on "y".
+func (c *writeConfirm) ask(profile, statement, reason string, run func() tea.Cmd) {
+	c.profile, c.statement, c.reason, c.run = profile, statement, reason, run
 }
 
 func (c *writeConfirm) pending() bool { return c.run != nil }
@@ -36,14 +41,23 @@ func (c *writeConfirm) answer(msg tea.KeyPressMsg) (run tea.Cmd, cancelled bool)
 	return nil, true
 }
 
-// prompt is the question, fitted to width: a long statement is collapsed
-// to one line and shortened with "..." so "Run? y/N" always shows.
-func (c *writeConfirm) prompt(width int) string {
+// confirmTail ends the prompt's first line, so the question always shows.
+const confirmTail = " Run? y/N"
+
+// prompt is the question, fitted to width: the statement collapsed to one
+// line and, when too long, cut with an ellipsis so "Run? y/N" always shows;
+// then, on a second line, why the statement counts as a write.
+func (c *writeConfirm) prompt(width int) []string {
 	head := "This will write to " + c.profile + ": "
-	const tail = ". Run? y/N"
-	stmt := []rune(strings.Join(strings.Fields(c.statement), " "))
-	if room := width - len([]rune(head)) - len(tail); len(stmt) > room {
-		stmt = append(stmt[:max(0, room-3)], []rune("...")...)
+	stmt := strings.Join(strings.Fields(c.statement), " ")
+	if room := width - ansi.StringWidth(head) - ansi.StringWidth(confirmTail); ansi.StringWidth(stmt) > room {
+		stmt = ansi.Truncate(stmt, max(room, 1), "…")
+	} else if !strings.HasSuffix(stmt, ".") {
+		stmt += "."
 	}
-	return head + string(stmt) + tail
+	lines := []string{head + stmt + confirmTail}
+	if c.reason != "" {
+		lines = append(lines, "why: "+c.reason)
+	}
+	return lines
 }

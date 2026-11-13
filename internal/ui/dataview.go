@@ -249,6 +249,9 @@ func applyPageViewMsg(msg pageViewMsg) {
 	}
 }
 
+// busy reports whether a page load, count, or export is running.
+func (d *dataViewTab) busy() bool { return d.loading || d.counting || d.exportCancel != nil }
+
 // Cancel cancels the tab's running page, count, and export (Ctrl+C).
 func (d *dataViewTab) Cancel() {
 	d.work.cancelAll()
@@ -411,12 +414,16 @@ func (d *dataViewTab) View(width, height int, focused bool) string {
 	// its row count cannot tell this page's range; showing a plain
 	// "loading..." instead of indicator()'s stale range avoids reporting a
 	// range that belongs to a page no longer being fetched.
-	badge := "loading..."
+	badge := busyText("loading", d.loadAt)
 	if !d.loading {
 		badge = d.indicator()
 	}
-	header := headerLine(width, strings.Join(d.path, "."), d.profile+" · "+d.adapter, badgeStyle.Render(badge))
-	footer := footerLine(width, d.notice, d.grid.searchStatus(), d.exportStatus, d.editingPageSize, d.pageSizeInput, d.pageSize, "")
+	header := tabHeaderLine(width, d.access, strings.Join(d.path, "."), d.profile+" · "+d.adapter, badgeStyle.Render(badge))
+	export := d.exportStatus
+	if d.exportCancel != nil {
+		export = busyText("exporting", d.exportAt) + " · ctrl+c cancels"
+	}
+	footer := footerLine(width, d.notice, d.grid.searchStatus(), export, d.editingPageSize, d.pageSizeInput, d.pageSize, "")
 	// A server error (e.g. a bad WHERE) replaces only the grid, so the
 	// fields above it stay visible and editable.
 	if d.err != nil {
@@ -460,6 +467,10 @@ func (d *dataViewTab) Update(k tea.KeyPressMsg, keys keyMap, pool *connPool) tea
 		d.editing, d.fieldInput = fieldExport, ""
 		return nil
 	case key.Matches(k, keys.NextPage):
+		// A short page is the last one; there is nothing after it.
+		if d.err == nil && len(d.grid.rows) < d.pageSize {
+			return nil
+		}
 		d.offset += d.pageSize
 		return d.loadCmd(pool)
 	case key.Matches(k, keys.PrevPage):

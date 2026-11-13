@@ -3,12 +3,14 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/Snarap1/hqdb/internal/adapters"
+	"github.com/Snarap1/hqdb/internal/config"
 	"github.com/Snarap1/hqdb/internal/ddl"
 )
 
@@ -40,7 +42,19 @@ type ddlTab struct {
 	// cancelled is set when Ctrl+C stopped the load.
 	cancelled bool
 	work      cancelSet
+
+	// access is the Profile's access mode, for the header badge.
+	access config.Access
+	// loadAt is when the load started.
+	loadAt time.Time
+	// scroll is the first definition line shown; pageRows is how many
+	// the last frame showed, for PgUp and PgDn.
+	scroll, pageRows int
 }
+
+func (t *ddlTab) setAccess(a config.Access) { t.access = a }
+
+func (t *ddlTab) busy() bool { return t.loading }
 
 // Cancel cancels the running DDL load (Ctrl+C).
 func (t *ddlTab) Cancel() { t.work.cancelAll() }
@@ -51,16 +65,52 @@ func (t *ddlTab) Heading() tabHeading {
 	return tabHeading{tag: "DDL", profile: t.profile, object: strings.Join(t.path, ".")}
 }
 
-// Update does nothing: the copy key is routed by the Model through
-// CopyText, and a DDL tab has no other keys of its own.
-func (t *ddlTab) Update(tea.KeyPressMsg, keyMap, *connPool) tea.Cmd { return nil }
+// Update scrolls the definition (the up, down, and paging keys); the copy
+// key is routed by the Model through CopyText.
+func (t *ddlTab) Update(k tea.KeyPressMsg, keys keyMap, _ *connPool) tea.Cmd {
+	n := t.lineCount()
+	if n == 0 {
+		return nil
+	}
+	if d, ok := keys.moveBy(k, t.scroll, n, t.pageRows); ok {
+		t.scroll = clampInt(t.scroll+d, 0, n-1)
+		return nil
+	}
+	switch {
+	case key.Matches(k, keys.Up):
+		t.scroll = max(t.scroll-1, 0)
+	case key.Matches(k, keys.Down):
+		t.scroll = min(t.scroll+1, n-1)
+	}
+	return nil
+}
+
+// shownText is the definition as the tab shows it, labeled when it is
+// reconstructed; "" before it has loaded.
+func (t *ddlTab) shownText() string {
+	if t.ddl == nil {
+		return ""
+	}
+	if !t.ddl.Native {
+		return reconstructedLabel + "\n\n" + t.ddl.Definition
+	}
+	return t.ddl.Definition
+}
+
+func (t *ddlTab) lineCount() int {
+	if t.ddl == nil {
+		return 0
+	}
+	return strings.Count(strings.TrimRight(t.shownText(), "\n"), "\n") + 1
+}
 
 func (t *ddlTab) EditingText() bool { return false }
 
-// Help hints the copy key only once there is something to copy.
+// Help hints the copy and scroll keys only once there is something to
+// copy.
 func (t *ddlTab) Help(keys keyMap) []key.Binding {
 	if _, ok := t.CopyText(); ok {
-		return []key.Binding{keys.Copy}
+		return []key.Binding{keys.Copy, hint("↑↓ pgup/pgdn g/G", "scroll")}
 	}
 	return nil
 }
@@ -93,6 +143,7 @@ func openDDLCmd(pool *connPool, profile, adapter string, path []string) (*ddlTab
 		profile: profile,
 		path:    append([]string{}, path...),
 		loading: true,
+		loadAt:  time.Now(),
 	}
 	database := poolDatabase(adapter, path)
 	ctx, done := t.work.start()
@@ -122,28 +173,27 @@ func applyDDLMsg(msg ddlMsg) {
 
 // View is a DDL tab's content: a header, then the definition, syntax-
 // highlighted with line numbers, labeled as reconstructed when it is not
-// the server's own text. Height is not used; the frame clips the content.
-func (t *ddlTab) View(width, _ int, _ bool) string {
+// the server's own text, scrolled to its first shown line.
+func (t *ddlTab) View(width, height int, _ bool) string {
 	sub := t.profile + " · DDL"
 	if t.ddl != nil && !t.ddl.Native {
 		sub += " · reconstructed"
 	}
 	var b strings.Builder
-	b.WriteString(headerLine(width, strings.Join(t.path, "."), sub, ""))
+	b.WriteString(tabHeaderLine(width, t.access, strings.Join(t.path, "."), sub, ""))
 	b.WriteString("\n\n")
+	t.pageRows = max(height-2, 1)
 	switch {
 	case t.loading:
-		b.WriteString(mutedStyle.Render("Loading..."))
+		b.WriteString(mutedStyle.Render(busyText("Loading", t.loadAt)))
 	case t.cancelled:
 		b.WriteString(accentStyle.Render("load cancelled"))
 	case t.err != nil:
 		b.WriteString(errorStyle.Width(max(width, 1)).Render("Error: " + t.err.Error()))
 	case t.ddl != nil:
-		text := t.ddl.Definition
-		if !t.ddl.Native {
-			text = reconstructedLabel + "\n\n" + text
-		}
-		b.WriteString(numberLines(strings.TrimRight(highlightSQL(text), "\n"), width))
+		lines := strings.Split(numberLines(strings.TrimRight(highlightSQL(popupSafe(t.shownText())), "\n"), width), "\n")
+		t.scroll = clampInt(t.scroll, 0, len(lines)-1)
+		b.WriteString(strings.Join(lines[t.scroll:], "\n"))
 	}
 	return b.String()
 }

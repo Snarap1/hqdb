@@ -192,32 +192,61 @@ func TestMainContentRendersActiveTabOverNodeDetails(t *testing.T) {
 	mt.loading = true
 	m.tabs = []tab{mt}
 	got := ansi.Strip(m.mainContent(100, 30))
-	for _, want := range []string{"DATA mongo-dev hqdb.widgets", "loading..."} {
+	for _, want := range []string{"DATA mongo-dev hqdb.widgets", "loading…"} {
 		if !contains(got, want) {
 			t.Errorf("mainContent() = %q, want it to contain %q", got, want)
 		}
 	}
 }
 
-func TestOpenDataViewAppendsRatherThanReplacingAnExistingTab(t *testing.T) {
+func TestOpenDataViewFocusesTheExistingTabForTheSameObject(t *testing.T) {
 	m, coll := newMongoCollectionModel()
 	m, cmd1 := m.openDataView(coll)
 	if cmd1 == nil || len(m.tabs) != 1 {
 		t.Fatalf("first open: got %d tabs, want 1", len(m.tabs))
 	}
+	m = m.addTab(&stubTab{name: "other"})
+	m.focus = paneTree
 	m, cmd2 := m.openDataView(coll)
-	if cmd2 == nil || len(m.tabs) != 2 {
-		t.Fatalf("second open: got %d tabs, want 2 (opening again adds another tab)", len(m.tabs))
+	if cmd2 != nil || len(m.tabs) != 2 {
+		t.Fatalf("second open: got %d tabs and cmd %v, want 2 tabs and no new load", len(m.tabs), cmd2)
 	}
-	if m.activeTab != 1 {
-		t.Errorf("activeTab = %d, want 1 (the newest tab)", m.activeTab)
+	if m.activeTab != 0 || m.focus != paneMain {
+		t.Errorf("activeTab = %d, focus = %v; want the existing tab 0, focused", m.activeTab, m.focus)
+	}
+}
+
+func TestOpenDDLFocusesTheExistingDDLTab(t *testing.T) {
+	m, table := newPostgresTableModel()
+	_ = m.openDDLIfTable(table)
+	m = m.addTab(&stubTab{name: "other"})
+	if cmd := m.openDDLIfTable(table); cmd != nil || len(m.tabs) != 2 || m.activeTab != 0 {
+		t.Errorf("got %d tabs, active %d, cmd %v; want the existing DDL tab focused", len(m.tabs), m.activeTab, cmd)
+	}
+}
+
+func TestEnterOnATableOpensDataViewWithoutExpandingIt(t *testing.T) {
+	m, table := newPostgresTableModel()
+	newM, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	mm := newM.(Model)
+	if len(mm.tabs) != 1 {
+		t.Fatalf("got %d tabs, want 1", len(mm.tabs))
+	}
+	if table.expanded || table.loading {
+		t.Errorf("Enter expanded the Table (expanded %v, loading %v); l / → lists Columns", table.expanded, table.loading)
+	}
+	// Enter again focuses the same tab instead of adding one.
+	mm.focus = paneTree
+	newM, _ = mm.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := len(newM.(Model).tabs); got != 1 {
+		t.Errorf("second Enter: got %d tabs, want 1", got)
 	}
 }
 
 func TestTabManagementCyclesAndCloses(t *testing.T) {
 	m, coll := newMongoCollectionModel()
 	m, _ = m.openDataView(coll)
-	m, _ = m.openDataView(coll)
+	m = m.addTab(&stubTab{name: "other"})
 	if len(m.tabs) != 2 {
 		t.Fatalf("got %d tabs, want 2", len(m.tabs))
 	}
@@ -266,7 +295,7 @@ func TestOpenCellPopupShowsCellModeAndCopiesItsValue(t *testing.T) {
 	if got := m.mode(); got != "CELL" {
 		t.Fatalf("mode with the cell popup open = %q, want CELL", got)
 	}
-	if bar := ansi.Strip(renderStatusBar(100, m.mode(), m.paneHelp(), "")); !contains(bar, "y copy") || !contains(bar, "esc close") {
+	if bar := ansi.Strip(statusBar{mode: m.mode(), hints: m.paneHelp()}.render(100)); !contains(bar, "y copy") || !contains(bar, "esc close") {
 		t.Errorf("status bar with the popup open = %q, want the popup's own keys", bar)
 	}
 	if _, cmd := m.handleKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd == nil {

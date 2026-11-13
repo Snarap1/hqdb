@@ -11,13 +11,14 @@ func profileNodes(cfg *config.Config) []*node {
 	nodes := make([]*node, 0, len(names))
 	for _, name := range names {
 		p := cfg.Profiles[name]
+		access, _ := config.ProfileAccess(p) // an invalid access fails Validate below
 		adapter, err := config.Validate(p)
 		if err != nil {
 			nodes = append(nodes, &node{kind: kindProfile, name: name, profile: name,
-				adapter: config.AdapterName(p), validateErr: err})
+				adapter: config.AdapterName(p), validateErr: err, access: access})
 			continue
 		}
-		nodes = append(nodes, &node{kind: kindProfile, name: name, profile: name, adapter: adapter})
+		nodes = append(nodes, &node{kind: kindProfile, name: name, profile: name, adapter: adapter, access: access})
 	}
 	return nodes
 }
