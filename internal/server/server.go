@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -25,38 +26,110 @@ import (
 func Serve(ctx context.Context, version string) error {
 	server := mcp.NewServer(&mcp.Implementation{Name: "hqdb", Version: version}, nil)
 	maskKey = mask.NewKey()
+	pool = newConnPool(poolIdleTTL, poolMaxIdle, time.Now)
+	stop := make(chan struct{})
+	go pool.run(poolIdleTTL/4, stop)
+	defer pool.close()
+	defer close(stop)
 	registerTools(server)
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
 
-// openProfile resolves a profile name (or the default profile), opens a
-// connection, and closes it when the returned function is called. It also
-// returns the profile's access mode, which decides whether statements are
-// screened (ADR-0003), and its Masker, which is nil unless the Profile sets
-// mask = true (ADR-0005). A non-empty database selects one Database of a
-// postgres Profile (ADR-0004); every other adapter ignores it.
-func openProfile(ctx context.Context, name, database string) (adapters.DB, config.Access, *mask.Masker, func(), error) {
+// pool keeps connections across tool calls (ADR-0006). Serve sets it; while
+// it is nil (handlers called directly in tests) every call opens and closes
+// its own connection.
+var pool *connPool
+
+// opened is the connection one tool call checked out, with what the call
+// needs to know about its Profile.
+type opened struct {
+	conn adapters.DB
+	// access decides whether statements are screened (ADR-0003).
+	access config.Access
+	// m is nil unless the Profile sets mask = true (ADR-0005).
+	m *mask.Masker
+	// resets is adapters.ResetsSession of conn.
+	resets bool
+	// stateful is set by ranStatement.
+	stateful bool
+	// reset is adapters.ResetSession, replaced in tests.
+	reset   func(context.Context, adapters.DB) error
+	release func(keep bool)
+}
+
+// ranStatement records that the call sent the connection a statement hqdb
+// did not write itself, which may have changed session state (see close).
+// Handlers call it right before running the statement, after every screen
+// passed. hqdb's own Catalog and DDL statements change no session state.
+func (o *opened) ranStatement() { o.stateful = true }
+
+// resetTimeout bounds the session reset at the end of a call.
+const resetTimeout = 5 * time.Second
+
+// close hands the connection back to the pool, or closes it. After a
+// statement, a connection whose adapter resets session state is reset now,
+// so a lock or an open transaction ends with the call as it did when every
+// call closed its connection; one whose adapter cannot reset is closed. A
+// failed reset closes the connection too.
+func (o *opened) close() {
+	keep := !o.stateful
+	if o.stateful && o.resets {
+		ctx, cancel := context.WithTimeout(context.Background(), resetTimeout)
+		keep = o.reset(ctx, o.conn) == nil
+		cancel()
+	}
+	o.release(keep)
+}
+
+// openProfile resolves a profile name (or the default profile) and checks
+// out a connection for it; the caller defers close. The config, the Access
+// mode, and the Masker are resolved afresh on every call, so a config edit
+// applies to the next call; only the connection is reused, and only while
+// the Profile's parameters are unchanged (ADR-0006). A non-empty database
+// selects one Database of a postgres Profile (ADR-0004); every other
+// adapter ignores it.
+func openProfile(ctx context.Context, name, database string) (*opened, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, err
+	}
+	if name == "" {
+		name = cfg.DefaultProfile
 	}
 	profile, err := cfg.Profile(name)
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, err
 	}
 	access, err := config.ProfileAccess(profile)
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, err
 	}
 	m, err := maskerFor(cfg, profile)
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, err
 	}
-	conn, err := adapters.OpenDatabase(ctx, profile, database)
+	conn, release, err := checkout(ctx, name, database, profile)
 	if err != nil {
-		return nil, "", nil, nil, maskErr(m, err)
+		return nil, maskErr(m, err)
 	}
-	return conn, access, m, conn.Close, nil
+	return &opened{conn: conn, access: access, m: m, resets: adapters.ResetsSession(conn), reset: adapters.ResetSession, release: release}, nil
+}
+
+// checkout takes a connection from the pool, or opens a plain one that is
+// closed on release when there is no pool or the Profile cannot be keyed.
+func checkout(ctx context.Context, name, database string, profile map[string]any) (adapters.DB, func(keep bool), error) {
+	key, ok := newPoolKey(name, database, profile)
+	if pool == nil || !ok {
+		conn, err := adapters.OpenDatabase(ctx, profile, database)
+		if err != nil {
+			return nil, nil, err
+		}
+		return conn, func(bool) { conn.Close() }, nil
+	}
+	conn, _, release, err := pool.checkout(key, func() (adapters.DB, error) {
+		return adapters.OpenReusable(ctx, profile, database)
+	})
+	return conn, release, err
 }
 
 // screen refuses a statement whose detector reported violation, unless the
@@ -117,11 +190,12 @@ type getSchemaIn struct {
 }
 
 func getSchemaTool(ctx context.Context, req *mcp.CallToolRequest, in getSchemaIn) (_ *mcp.CallToolResult, _ catalog.SchemaOut, err error) {
-	conn, _, m, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
+	o, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, catalog.SchemaOut{}, err
 	}
-	defer closeConn()
+	defer o.close()
+	conn, m := o.conn, o.m
 	defer func() { err = maskErr(m, err) }()
 	out, err := catalog.GetSchema(ctx, conn, in.Path, in.NameFilter, in.IncludeColumns, catalog.DefaultLimits)
 	if err != nil {
@@ -136,11 +210,12 @@ type getColumnsIn struct {
 }
 
 func getColumnsTool(ctx context.Context, req *mcp.CallToolRequest, in getColumnsIn) (_ *mcp.CallToolResult, _ catalog.ColumnsOut, err error) {
-	conn, _, m, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
+	o, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, catalog.ColumnsOut{}, err
 	}
-	defer closeConn()
+	defer o.close()
+	conn, m := o.conn, o.m
 	defer func() { err = maskErr(m, err) }()
 	out, err := catalog.GetColumns(ctx, conn, in.Path)
 	if err != nil {
@@ -155,11 +230,12 @@ type getDdlIn struct {
 }
 
 func getDdlTool(ctx context.Context, req *mcp.CallToolRequest, in getDdlIn) (_ *mcp.CallToolResult, _ ddl.Out, err error) {
-	conn, _, m, closeConn, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
+	o, err := openProfile(ctx, in.Profile, adapters.PathDatabase(in.Path))
 	if err != nil {
 		return nil, ddl.Out{}, err
 	}
-	defer closeConn()
+	defer o.close()
+	conn, m := o.conn, o.m
 	defer func() { err = maskErr(m, err) }()
 	out, err := ddl.GetDDL(ctx, conn, in.Path)
 	if err != nil {
@@ -190,11 +266,12 @@ type RunQueryOut struct {
 }
 
 func runQueryTool(ctx context.Context, req *mcp.CallToolRequest, in runQueryIn) (_ *mcp.CallToolResult, _ RunQueryOut, err error) {
-	conn, access, m, closeConn, err := openProfile(ctx, in.Profile, in.Database)
+	o, err := openProfile(ctx, in.Profile, in.Database)
 	if err != nil {
 		return nil, RunQueryOut{}, err
 	}
-	defer closeConn()
+	defer o.close()
+	conn, access, m := o.conn, o.access, o.m
 	defer func() { err = maskErr(m, err) }()
 	sqlConn, ok := conn.(*adapters.SQL)
 	if !ok {
@@ -207,6 +284,7 @@ func runQueryTool(ctx context.Context, req *mcp.CallToolRequest, in runQueryIn) 
 	if limit == 0 {
 		limit = 50
 	}
+	o.ranStatement()
 	res, err := query.Run(ctx, sqlConn.SQL(), in.SQL, limit)
 	if err != nil {
 		return nil, RunQueryOut{}, err
@@ -215,13 +293,14 @@ func runQueryTool(ctx context.Context, req *mcp.CallToolRequest, in runQueryIn) 
 	if m != nil {
 		maskedColumns = m.Rows(res.Columns, res.Rows)
 	}
-	return nil, RunQueryOut{
+	out := RunQueryOut{
 		Columns:       res.Columns,
 		Rows:          res.Rows,
 		RowCount:      res.RowCount,
 		Truncated:     res.Truncated,
 		MaskedColumns: maskedColumns,
-	}, nil
+	}
+	return nil, out, nil
 }
 
 type runRedisIn struct {
@@ -237,11 +316,12 @@ type RunRedisOut struct {
 }
 
 func runRedisTool(ctx context.Context, req *mcp.CallToolRequest, in runRedisIn) (_ *mcp.CallToolResult, _ RunRedisOut, err error) {
-	conn, access, m, closeConn, err := openProfile(ctx, in.Profile, "")
+	o, err := openProfile(ctx, in.Profile, "")
 	if err != nil {
 		return nil, RunRedisOut{}, err
 	}
-	defer closeConn()
+	defer o.close()
+	conn, access, m := o.conn, o.access, o.m
 	defer func() { err = maskErr(m, err) }()
 	redisConn, ok := conn.(*adapters.Redis)
 	if !ok {
@@ -250,11 +330,18 @@ func runRedisTool(ctx context.Context, req *mcp.CallToolRequest, in runRedisIn) 
 	if err := guard(access, m, rediscmd.CommandViolation(in.Command), append([]string{in.Command}, in.Args...)...); err != nil {
 		return nil, RunRedisOut{}, err
 	}
+	// The allowlisted read commands leave no connection state behind
+	// (no SELECT, CLIENT, HELLO, MULTI, WATCH, or SUBSCRIBE), so only a
+	// command off the allowlist (a read-write Profile) taints the client.
+	if rediscmd.CommandViolation(in.Command) != "" {
+		o.ranStatement()
+	}
 	result, err := rediscmd.Run(ctx, redisConn, in.Command, in.Args)
 	if err != nil {
 		return nil, RunRedisOut{}, err
 	}
-	return nil, RunRedisOut{Command: strings.TrimSpace(in.Command), Result: maskRedis(m, in.Command, result)}, nil
+	out := RunRedisOut{Command: strings.TrimSpace(in.Command), Result: maskRedis(m, in.Command, result)}
+	return nil, out, nil
 }
 
 type runMongoIn struct {
@@ -285,11 +372,12 @@ type RunMongoOut struct {
 }
 
 func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) (_ *mcp.CallToolResult, _ RunMongoOut, err error) {
-	conn, access, m, closeConn, err := openProfile(ctx, in.Profile, "")
+	o, err := openProfile(ctx, in.Profile, "")
 	if err != nil {
 		return nil, RunMongoOut{}, err
 	}
-	defer closeConn()
+	defer o.close()
+	conn, access, m := o.conn, o.access, o.m
 	defer func() { err = maskErr(m, err) }()
 	mongoConn, ok := conn.(*adapters.Mongo)
 	if !ok {
@@ -312,6 +400,7 @@ func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) 
 	if limit == 0 {
 		limit = 50
 	}
+	o.ranStatement()
 	res, err := mongocmd.Run(ctx, mongoConn, mongocmd.Request{
 		Database:   in.Database,
 		Collection: in.Collection,
@@ -330,7 +419,8 @@ func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) 
 		return nil, RunMongoOut{}, err
 	}
 	docs, maskedFields := maskMongo(m, op, in.Field, res.Documents)
-	return nil, RunMongoOut{Operation: op, Documents: docs, Count: res.Count, Truncated: res.Truncated, MaskedFields: maskedFields}, nil
+	out := RunMongoOut{Operation: op, Documents: docs, Count: res.Count, Truncated: res.Truncated, MaskedFields: maskedFields}
+	return nil, out, nil
 }
 
 type exportQueryIn struct {
@@ -350,11 +440,12 @@ type ExportQueryOut struct {
 }
 
 func exportQueryTool(ctx context.Context, req *mcp.CallToolRequest, in exportQueryIn) (_ *mcp.CallToolResult, _ ExportQueryOut, err error) {
-	conn, access, m, closeConn, err := openProfile(ctx, in.Profile, in.Database)
+	o, err := openProfile(ctx, in.Profile, in.Database)
 	if err != nil {
 		return nil, ExportQueryOut{}, err
 	}
-	defer closeConn()
+	defer o.close()
+	conn, access, m := o.conn, o.access, o.m
 	defer func() { err = maskErr(m, err) }()
 	sqlConn, ok := conn.(*adapters.SQL)
 	if !ok {
@@ -373,11 +464,13 @@ func exportQueryTool(ctx context.Context, req *mcp.CallToolRequest, in exportQue
 	if m != nil {
 		transform = m.Row
 	}
+	o.ranStatement()
 	n, err := export.Query(ctx, sqlConn.SQL(), in.SQL, in.DestPath, format, in.Limit, transform)
 	if err != nil {
 		return nil, ExportQueryOut{}, err
 	}
-	return nil, ExportQueryOut{Path: in.DestPath, Format: format, RowCount: n}, nil
+	out := ExportQueryOut{Path: in.DestPath, Format: format, RowCount: n}
+	return nil, out, nil
 }
 
 // maskNote ends the description of every tool that returns data or takes a

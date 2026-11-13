@@ -164,7 +164,8 @@ hqdb mcp
 ```
 
 The server speaks MCP over stdio: stdout is the protocol channel and every diagnostic goes to stderr.
-Connections are opened per tool call and closed afterwards, so it runs happily next to a terminal UI session.
+The server reuses connections across tool calls and resets their session state between calls, so a `SET`, a temporary table, or an unfinished `BEGIN` never reaches the next call ([ADR-0006](docs/adr/0006-mcp-connection-pool.md)).
+It keeps its own connections, apart from any terminal UI session.
 
 | tool | what it does |
 | --- | --- |

@@ -211,20 +211,27 @@ func OpenDatabase(ctx context.Context, p map[string]any, database string) (DB, e
 // openPostgresIn opens a connection to a non-empty database of a postgres
 // Profile, after checking the Profile exposes it.
 func openPostgresIn(ctx context.Context, p map[string]any, database string) (*SQL, error) {
-	configured, err := configuredDatabase(p)
-	if err != nil {
+	if err := checkPostgresDatabase(ctx, p, database); err != nil {
 		return nil, err
 	}
-	if configured != database {
-		avail, err := Databases(ctx, p)
-		if err != nil {
-			return nil, err
-		}
-		if err := CheckDatabase(database, avail); err != nil {
-			return nil, err
-		}
-	}
 	return connectPostgres(p, database)
+}
+
+// checkPostgresDatabase refuses a non-empty database that a postgres
+// Profile does not expose: one that is neither its dbname nor discovered.
+func checkPostgresDatabase(ctx context.Context, p map[string]any, database string) error {
+	configured, err := configuredDatabase(p)
+	if err != nil {
+		return err
+	}
+	if configured == database {
+		return nil
+	}
+	avail, err := Databases(ctx, p)
+	if err != nil {
+		return err
+	}
+	return CheckDatabase(database, avail)
 }
 
 // ForDatabase returns a connection bound to database: c itself when it

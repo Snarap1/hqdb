@@ -1,5 +1,7 @@
-// Package adapters opens one fresh connection per tool call for a profile's
-// adapter: postgres, mysql, mssql, odbc (compat), clickhouse, redis, or mongodb.
+// Package adapters opens connections for a profile's adapter: postgres,
+// mysql, mssql, odbc (compat), clickhouse, redis, or mongodb. Open and
+// OpenDatabase open plain connections; OpenReusable opens one the MCP
+// server keeps across tool calls (ADR-0006).
 package adapters
 
 import (
@@ -21,9 +23,8 @@ import (
 	"github.com/Snarap1/hqdb/internal/config"
 )
 
-// DB is an open connection to one profile. Connections are opened per tool
-// call and closed afterwards, so the server can run next to a live database
-// TUI session without sharing state.
+// DB is an open connection to one profile. The terminal UI and the MCP
+// server each open their own, so they never share session state.
 type DB interface {
 	// Kind is the adapter name: postgres, mysql, mssql, odbc, clickhouse, redis, or mongodb.
 	Kind() string
@@ -41,6 +42,12 @@ type SQL struct {
 	// other Databases of the same server (ForDatabase, ADR-0004).
 	profile  map[string]any
 	database string
+	// epoch is set only on a postgres connection opened by OpenReusable;
+	// it arms the session reset between checkouts (ADR-0006).
+	epoch *sessionEpoch
+	// stateless is set on a clickhouse connection over HTTP, where every
+	// request is its own session.
+	stateless bool
 }
 
 func (c *SQL) Kind() string { return c.kind }
@@ -413,10 +420,19 @@ func openClickHouse(p map[string]any) (DB, error) {
 		opts.TLS = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}
 	}
 	db := clickhouse.OpenDB(opts)
-	return &SQL{kind: "clickhouse", db: db}, nil
+	// clickhouse-go sends no session_id over HTTP, so SET and temporary
+	// tables last for one request only.
+	return &SQL{kind: "clickhouse", db: db, stateless: opts.Protocol == clickhouse.HTTP}, nil
 }
 
-func openRedis(p map[string]any) (DB, error) {
+func openRedis(p map[string]any) (DB, error) { return openRedisWith(p, false) }
+
+// openRedisWith opens a redis client; a reusable one (ADR-0006) never
+// retries a command, because go-redis retries on network errors, and a
+// write whose reply was lost would then run twice. A dead pooled
+// connection is still replaced before a command is sent: go-redis checks
+// an idle connection's health when it takes it from its pool.
+func openRedisWith(p map[string]any, reusable bool) (DB, error) {
 	host, port, err := hostPort(p, "localhost", 6379)
 	if err != nil {
 		return nil, err
@@ -449,6 +465,9 @@ func openRedis(p map[string]any) (DB, error) {
 		Username: user,
 		Password: pass,
 		DB:       dbNum,
+	}
+	if reusable {
+		opts.MaxRetries = -1
 	}
 	if secure {
 		opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}

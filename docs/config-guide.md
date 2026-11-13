@@ -368,6 +368,10 @@ On a postgres profile, `run_query` and `export_query` take an optional `database
 `get_columns`, `get_ddl`, and `get_schema` take the database as the first `path` element.
 A database the profile does not expose (not discovered) is refused with `database "<name>" is not available for this profile; available: <list>`.
 
+Each tool call is its own session, even though the server reuses connections between calls ([ADR-0006](adr/0006-mcp-connection-pool.md)).
+A `SET`, a temporary table, a session lock, or an unfinished `BEGIN` from one call is gone in the next, so a transaction cannot span two calls; send it as one statement where the database allows it.
+A config edit applies to the next call: a changed Profile gets a new connection.
+
 The SQL is sent to the database unmodified; no `LIMIT` is injected, so bound the response with the `limit` argument.
 `run_query` defaults to 50 rows, `export_query` to unlimited when `limit` is 0.
 A `json` or `ndjson` export writes each row as an object whose keys follow the result's column order.

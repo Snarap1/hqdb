@@ -26,7 +26,9 @@ Masking (ADR-0005) lives in `internal/server` only, through `internal/mask`; the
 - Each handler defers `maskErr` right after `openProfile`, so error texts are masked too; statement tools call `guard`, which runs the marker screen (`mask.MarkerViolation`, whatever the Access mode) before the access screen.
 - `export.Query` takes an optional `RowTransform`; the server passes `Masker.Row`, the terminal UI passes nil.
 
-The MCP server opens a **fresh connection per tool call** and closes it after; the terminal UI keeps one lazy connection per (Profile, Database) pair (`internal/ui/pool.go`; a postgres Profile without `dbname` discovers its Databases, ADR-0004) plus a dedicated session per SQL Console, bound to one Database.
+The MCP server keeps a **connection pool** (`internal/server/pool.go`, ADR-0006): keyed by Profile, Database, and a hash of the Profile table, one checkout per call, 60 s idle TTL; config, Access mode, and Masker are still resolved on every call.
+After a statement hqdb did not write (`opened.ranStatement`), the connection is reset when the call ends (`adapters.ResetSession`: postgres `DISCARD ALL`, mssql TDS reset) or closed where the adapter cannot reset (mysql, clickhouse native, redis off the allowlist; `adapters.ResetsSession`).
+The terminal UI keeps one lazy connection per (Profile, Database) pair (`internal/ui/pool.go`; a postgres Profile without `dbname` discovers its Databases, ADR-0004) plus a dedicated session per SQL Console, bound to one Database.
 Every terminal UI tab kind implements the `tab` interface (`internal/ui/tab.go`); `adapterui.go` is the one per-Adapter dispatch table.
 Visual design follows `docs/ui/TUI database client.html`; colors live only in `theme.go`.
 
@@ -34,6 +36,7 @@ Rules that look like bugs and are not:
 - SQL screening matches write keywords as whole words, so `SELECT ... FOR UPDATE` and a column literally named `update` or `comment` are refused on a read-only Profile.
 - Config merge is top-level key replacement, not deep merge; a project `[masking]` replaces the global one whole.
 - Markers differ between MCP sessions: the key is random per process and never stored.
+- The MCP pool closes a mysql or native clickhouse connection after every `run_query`/`export_query`: neither has a session reset, so only Catalog and DDL calls reuse them.
 - A bare `name` column is not masked: it is deliberately not a built-in rule; users add it to `[masking] columns`.
 - A phone stored as a bare integer is caught by column name only: the phone detector needs a `+`, `00`, or a national trunk prefix.
 - Profiles are raw `map[string]any` tables read through `config.Opt*` accessors; per-adapter key validation rejects unknown keys with the valid-key list.

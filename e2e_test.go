@@ -99,6 +99,30 @@ user = "hq"
 password = "hq"
 auth_source = "admin"
 database = "hqdb"
+
+[profiles.my-rw]
+adapter = "mysql"
+access = "read-write"
+host = "127.0.0.1"
+port = 53306
+user = "hq"
+password = "hq"
+dbname = "hqdb"
+
+[profiles.ms-rw]
+adapter = "mssql"
+access = "read-write"
+host = "127.0.0.1"
+port = 51433
+user = "sa"
+password = "Hq!Passw0rd"
+dbname = "hqdb"
+
+[profiles.redis-rw]
+adapter = "redis"
+access = "read-write"
+host = "127.0.0.1"
+port = 56379
 `)...)
 	cfgPath := filepath.Join(dir, "hqdb.toml")
 	if err := os.WriteFile(cfgPath, cfg, 0o600); err != nil {
