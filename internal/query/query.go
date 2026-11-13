@@ -21,30 +21,25 @@ type Result struct {
 // Run executes a SQL query, collecting at most limit rows (limit <= 0 means
 // unlimited). The caller is responsible for screening sqlText first. ctx is
 // passed to the driver so a cancelled or timed-out caller stops the query in
-// flight; there is no default timeout.
-func Run(ctx context.Context, conn *sql.DB, sqlText string, limit int) (*Result, error) {
-	rows, err := conn.QueryContext(ctx, sqlText)
+// flight; there is no default timeout. When the limit cuts the result
+// short, the rest of it is not read: the query is stopped on the server
+// (sqlrows.Cursor.Close), which conn, a pool, allows.
+func Run(ctx context.Context, conn *sql.DB, sqlText string, limit int) (_ *Result, err error) {
+	cur, err := sqlrows.Query(ctx, conn, sqlText)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	columns, err := rows.Columns()
-	if err != nil {
+	res := &Result{}
+	defer func() { cur.Close(res.Truncated || err != nil) }()
+	if res.Columns, err = cur.Rows.Columns(); err != nil {
 		return nil, err
 	}
-	res := &Result{Columns: columns}
-	scan := sqlrows.NewScan(len(columns))
-	for rows.Next() {
-		if limit > 0 && res.RowCount >= limit {
-			res.Truncated = true
-			break
-		}
-		row, err := scan.Row(rows)
-		if err != nil {
-			return nil, err
-		}
+	res.RowCount, res.Truncated, err = sqlrows.Stream(cur.Rows, res.Columns, limit, func(row []any) error {
 		res.Rows = append(res.Rows, row)
-		res.RowCount++
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return res, rows.Err()
+	return res, nil
 }

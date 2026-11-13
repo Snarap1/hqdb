@@ -7,7 +7,6 @@ package export
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -40,40 +39,33 @@ func InferFormat(destPath string) (string, error) {
 
 // Querier is what Query reads rows through: a *sql.DB for the MCP tool, or
 // a SQL Console's pinned *sql.Conn so an export sees that session's state.
-type Querier interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
+// A pool's query cut short by limit is stopped on the server; a pinned
+// session's is read to the end instead (sqlrows.Cursor.Close).
+type Querier = sqlrows.Querier
 
 // RowTransform rewrites one row before a writer sees it; the MCP server uses
 // it to mask personal data (ADR-0005). nil means rows are written unchanged.
 type RowTransform func(columns []string, row []any) []any
 
-// streamRows is sqlrows.Stream with transform applied once to every row
-// before emit, so every format writer sees the same rows.
-func streamRows(rows *sql.Rows, columns []string, limit int, transform RowTransform, emit func([]any) error) (int, error) {
-	return sqlrows.Stream(rows, columns, limit, func(row []any) error {
-		if transform != nil {
-			row = transform(columns, row)
-		}
-		return emit(row)
-	})
-}
+// rowStream hands every row to emit and returns how many it handed over.
+type rowStream func(emit func([]any) error) (int, error)
 
 // Query streams a SQL query into destPath. limit <= 0 means unlimited. The
 // caller is responsible for screening sqlText first. ctx is passed to the
 // driver so a cancelled or timed-out caller stops the query in flight; there
 // is no default timeout.
-func Query(ctx context.Context, conn Querier, sqlText, destPath, format string, limit int, transform RowTransform) (int, error) {
+func Query(ctx context.Context, conn Querier, sqlText, destPath, format string, limit int, transform RowTransform) (_ int, err error) {
 	dir := filepath.Dir(destPath)
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return 0, fmt.Errorf("parent directory does not exist: %s", dir)
 	}
-	rows, err := conn.QueryContext(ctx, sqlText)
+	cur, err := sqlrows.Query(ctx, conn, sqlText)
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
-	columns, err := rows.Columns()
+	var truncated bool
+	defer func() { cur.Close(truncated || err != nil) }()
+	columns, err := cur.Rows.Columns()
 	if err != nil {
 		return 0, err
 	}
@@ -83,14 +75,26 @@ func Query(ctx context.Context, conn Querier, sqlText, destPath, format string, 
 			return 0, err
 		}
 	}
+	// stream applies transform once to every row before a writer sees it,
+	// so every format writes the same rows.
+	stream := func(emit func([]any) error) (int, error) {
+		n, cut, err := sqlrows.Stream(cur.Rows, columns, limit, func(row []any) error {
+			if transform != nil {
+				row = transform(columns, row)
+			}
+			return emit(row)
+		})
+		truncated = cut
+		return n, err
+	}
 	return writeFile(destPath, func(w *bufio.Writer) (int, error) {
 		switch format {
 		case "csv":
-			return writeCSV(w, rows, columns, limit, transform)
+			return writeCSV(w, columns, stream)
 		case "json":
-			return writeJSONRows(w, obj, rows, columns, limit, transform)
+			return writeJSONRows(w, obj, stream)
 		case "ndjson":
-			return writeNDJSON(w, obj, rows, columns, limit, transform)
+			return writeNDJSON(w, obj, stream)
 		}
 		return 0, fmt.Errorf("format must be one of %s (got %q)", strings.Join(Formats, ", "), format)
 	})
@@ -324,12 +328,12 @@ func writeDocumentsCSV(destPath string, src DocumentSource) (n int, err error) {
 // writeCSV writes a header row and one line per row, stringifying every
 // value. csv.NewWriter reuses w as its buffer, since w is a *bufio.Writer
 // at least as large as the one it would make.
-func writeCSV(w0 *bufio.Writer, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
+func writeCSV(w0 *bufio.Writer, columns []string, stream rowStream) (int, error) {
 	w := csv.NewWriter(w0)
 	if err := w.Write(columns); err != nil {
 		return 0, err
 	}
-	n, err := streamRows(rows, columns, limit, transform, func(row []any) error {
+	n, err := stream(func(row []any) error {
 		rec := make([]string, len(row))
 		for i, v := range row {
 			rec[i] = stringify(v)
@@ -345,12 +349,12 @@ func writeCSV(w0 *bufio.Writer, rows *sql.Rows, columns []string, limit int, tra
 
 // writeJSONRows writes a streamed JSON array of row objects, keys in
 // column order.
-func writeJSONRows(w *bufio.Writer, obj *objectEncoder, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
+func writeJSONRows(w *bufio.Writer, obj *objectEncoder, stream rowStream) (int, error) {
 	if _, err := w.WriteString("["); err != nil {
 		return 0, err
 	}
 	first := true
-	n, err := streamRows(rows, columns, limit, transform, func(row []any) error {
+	n, err := stream(func(row []any) error {
 		if !first {
 			if _, err := w.WriteString(","); err != nil {
 				return err
@@ -367,8 +371,8 @@ func writeJSONRows(w *bufio.Writer, obj *objectEncoder, rows *sql.Rows, columns 
 }
 
 // writeNDJSON writes one row object per line, keys in column order.
-func writeNDJSON(w *bufio.Writer, obj *objectEncoder, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
-	return streamRows(rows, columns, limit, transform, func(row []any) error {
+func writeNDJSON(w *bufio.Writer, obj *objectEncoder, stream rowStream) (int, error) {
+	return stream(func(row []any) error {
 		return obj.encode(w, row)
 	})
 }

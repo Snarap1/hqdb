@@ -50,6 +50,15 @@ func Run(ctx context.Context, s Session, stmt string, limit int) (*Result, error
 		}
 		return &Result{Affected: n, Duration: time.Since(start)}, nil
 	}
+	// The result is read to the end on Close even when the preview limit
+	// cuts it short, which costs the time to receive the rest. Stopping the
+	// query instead (cancelling its context, as query.Run does on a pool)
+	// would break the connection with pgx and go-sql-driver/mysql, and the
+	// connection is the Console's session: its SET values, temporary
+	// tables, and open transaction would be lost. go-mssqldb stops early on
+	// Close by itself; for the others no safe way to discard the rest of a
+	// result while keeping the session exists, so the Console keeps the
+	// drain; see sqlrows.Cursor.Close.
 	rows, err := s.QueryContext(ctx, stmt)
 	if err != nil {
 		return nil, err

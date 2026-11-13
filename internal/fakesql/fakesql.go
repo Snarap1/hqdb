@@ -167,6 +167,7 @@ type rows struct {
 	ctx   context.Context
 	c     *conn
 	n, i  int
+	eof   bool
 	names []string
 }
 
@@ -177,6 +178,7 @@ func (r *rows) Next(dest []driver.Value) error {
 		return err
 	}
 	if r.i >= r.n {
+		r.eof = true
 		return io.EOF
 	}
 	for c := range dest {
@@ -187,13 +189,16 @@ func (r *rows) Next(dest []driver.Value) error {
 	return nil
 }
 
-// Close finishes the result the way pgx and go-sql-driver/mysql do: it
-// reads every remaining row, unless the query's context is cancelled, which
-// breaks the connection instead and reports the cancellation.
+// Close finishes the result the way pgx and go-sql-driver/mysql do: until
+// Next has reported the end, it reads every remaining row (and the end of
+// result message after the last one), unless the query's context is
+// cancelled, which breaks the connection instead and reports the
+// cancellation.
 func (r *rows) Close() error {
-	if r.i >= r.n {
+	if r.eof {
 		return nil
 	}
+	r.eof = true
 	if err := r.ctx.Err(); err != nil {
 		r.c.broken.Store(true)
 		r.c.c.stats.Cancelled.Add(1)
