@@ -5,6 +5,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The palette is the GitHub-dark scheme of docs/ui/TUI database client.html
@@ -61,8 +62,11 @@ func framePane(content, title string, width, height int, focused bool) string {
 	if width < 2 || height < 2 {
 		return ""
 	}
-	inner := lipgloss.NewStyle().Width(width - 2).Height(height - 2).MaxWidth(width - 2).MaxHeight(height - 2).Render(content)
-	box := paneBorder(focused).Render(inner)
+	box, ok := fastFrame(content, width-2, height-2, focused)
+	if !ok {
+		inner := lipgloss.NewStyle().Width(width - 2).Height(height - 2).MaxWidth(width - 2).MaxHeight(height - 2).Render(content)
+		box = paneBorder(focused).Render(inner)
+	}
 	if title == "" {
 		return box
 	}
@@ -79,6 +83,55 @@ func framePane(content, title string, width, height int, focused bool) string {
 		return top
 	}
 	return top + "\n" + lines[1]
+}
+
+// borderPaints are the pane border's escape sequences, focused ([1]) or
+// not ([0]), rendered once through lipgloss.
+var borderPaints = [2][2]string{
+	borderPaint(false),
+	borderPaint(true),
+}
+
+func borderPaint(focused bool) [2]string {
+	pre, suf := styleAround(lipgloss.NewStyle().Foreground(paneBorder(focused).GetBorderTopForeground()))
+	return [2]string{pre, suf}
+}
+
+// fastFrame is framePane's border around content fitted to w x h without
+// a lipgloss render, the common case of every shown line already fitting
+// in w cells (tab views clip their own lines). It reports false for
+// content lipgloss would rewrap or retab, which framePane then renders
+// the slow way, so the output is always the same.
+func fastFrame(content string, w, h int, focused bool) (string, bool) {
+	if strings.ContainsAny(content, "\t\r") {
+		return "", false
+	}
+	p := borderPaints[0]
+	if focused {
+		p = borderPaints[1]
+	}
+	side := p[0] + "│" + p[1]
+	var b strings.Builder
+	b.Grow(len(content) + (h+2)*(w+len(side)*2+2))
+	b.WriteString(p[0] + "╭" + strings.Repeat("─", w) + "╮" + p[1])
+	rest := content
+	for i := 0; i < h; i++ {
+		var line string
+		if rest != "" || i == 0 {
+			line, rest, _ = strings.Cut(rest, "\n")
+		}
+		lw := ansi.StringWidth(line)
+		if lw > w {
+			return "", false
+		}
+		b.WriteByte('\n')
+		b.WriteString(side)
+		b.WriteString(line)
+		b.WriteString(strings.Repeat(" ", w-lw))
+		b.WriteString(side)
+	}
+	b.WriteString("\n" + p[0] + "╰" + strings.Repeat("─", w) + "╯" + p[1])
+	return b.String(), true
 }
 
 // headerLine renders a tab's one-line header: title in bold, sub muted
