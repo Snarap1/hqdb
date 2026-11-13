@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -50,6 +51,10 @@ type dataViewTab struct {
 	grid    grid
 	loading bool
 	err     error
+	// loadAt and exportAt are when the running page load and export
+	// started, for the elapsed time shown while they run.
+	loadAt   time.Time
+	exportAt time.Time
 
 	editingPageSize bool
 	pageSizeInput   string
@@ -126,15 +131,14 @@ type pageViewMsg struct {
 	result    *query.Result
 	err       error
 	cancelled bool
+	reconnect
 }
 
 // loadCmd marks the tab loading and returns the tea.Cmd that runs its
-// current page query (Table, WHERE, ORDER BY, page size, offset) against the Profile's shared connection. A query
-// that fails on the cached connection is retried once after Reopen, so a
-// connection the server dropped recovers without the caller doing anything,
-// mirroring loadCmd in load.go.
+// current page query (Table, WHERE, ORDER BY, page size, offset) against
+// the Profile's shared connection (see runOnProfile).
 func (d *dataViewTab) loadCmd(pool *connPool) tea.Cmd {
-	d.loading = true
+	d.loading, d.loadAt = true, time.Now()
 	sqlText, err := dataview.BuildPageQuery(d.adapter, dataview.PageQuery{
 		Path: d.path, Where: d.where, OrderBy: d.orderBy, PageSize: d.pageSize, Offset: d.offset,
 	})
@@ -149,37 +153,27 @@ func (d *dataViewTab) loadCmd(pool *connPool) tea.Cmd {
 		if err != nil {
 			return pageViewMsg{tab: d, err: err}
 		}
-		res, err := runOnProfile(ctx, pool, profile, database, sqlText)
-		return pageViewMsg{tab: d, result: res, err: err, cancelled: ctx.Err() != nil}
+		res, re, err := runOnProfile(ctx, pool, profile, database, sqlText)
+		return pageViewMsg{tab: d, result: res, err: err, cancelled: ctx.Err() != nil, reconnect: reconnectedTo(profile, re)}
 	}
 }
 
 // runOnProfile runs sqlText on profile's shared SQL connection. A query
-// that fails on the cached connection is retried once after Reopen, so a
-// connection the server dropped recovers without the caller doing
-// anything, mirroring loadCmd in load.go. (A bad WHERE is retried too;
-// it fails the same way twice and its error is what the user sees.)
-func runOnProfile(ctx context.Context, pool *connPool, profile, database, sqlText string) (*query.Result, error) {
-	run := func(conn adapters.DB) (*query.Result, error) {
+// that fails with a connection-class error is retried once after Reopen
+// (connPool.run), so a connection the server dropped recovers without the
+// caller doing anything; a bad WHERE is not retried. reconnected reports
+// that the retry ran and succeeded.
+func runOnProfile(ctx context.Context, pool *connPool, profile, database, sqlText string) (res *query.Result, reconnected bool, err error) {
+	reconnected, err = pool.run(ctx, poolKey{profile, database}, func(conn adapters.DB) (bool, error) {
 		sqlConn, ok := conn.(*adapters.SQL)
 		if !ok {
-			return nil, fmt.Errorf("Data view is not available for %s", conn.Kind())
+			return false, fmt.Errorf("Data view is not available for %s", conn.Kind())
 		}
-		return query.Run(ctx, sqlConn.SQL(), sqlText, 0)
-	}
-	conn, err := pool.Open(poolKey{profile, database})
-	var res *query.Result
-	if err == nil {
-		res, err = run(conn)
-	}
-	if err != nil && ctx.Err() == nil {
-		conn2, rerr := pool.Reopen(poolKey{profile, database})
-		if rerr != nil {
-			return nil, rerr
-		}
-		res, err = run(conn2)
-	}
-	return res, err
+		var err error
+		res, err = query.Run(ctx, sqlConn.SQL(), sqlText, 0)
+		return true, err
+	})
+	return res, reconnected, err
 }
 
 // countViewMsg reports the result of a "#" count query, run for where.
@@ -189,6 +183,7 @@ type countViewMsg struct {
 	total     string
 	err       error
 	cancelled bool
+	reconnect
 }
 
 // countCmd marks the tab counting and returns the tea.Cmd that counts the
@@ -207,14 +202,14 @@ func (d *dataViewTab) countCmd(pool *connPool) tea.Cmd {
 		if err != nil {
 			return countViewMsg{tab: d, where: where, err: err}
 		}
-		res, err := runOnProfile(ctx, pool, profile, database, sqlText)
+		res, re, err := runOnProfile(ctx, pool, profile, database, sqlText)
 		if err != nil {
 			return countViewMsg{tab: d, where: where, err: err, cancelled: ctx.Err() != nil}
 		}
 		if len(res.Rows) != 1 || len(res.Rows[0]) != 1 {
 			return countViewMsg{tab: d, where: where, err: fmt.Errorf("count query returned an unexpected shape")}
 		}
-		return countViewMsg{tab: d, where: where, total: fmt.Sprint(res.Rows[0][0])}
+		return countViewMsg{tab: d, where: where, total: fmt.Sprint(res.Rows[0][0]), reconnect: reconnectedTo(profile, re)}
 	}
 }
 

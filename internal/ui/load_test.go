@@ -166,29 +166,41 @@ func TestLoadCmdReportsConnectErrorWhenOpenFails(t *testing.T) {
 	}
 }
 
-func TestLoadCmdRetriesOnceThenReportsConnectErrorWhenTheQueryKeepsFailing(t *testing.T) {
-	// database/sql connects lazily on first use, so Open rarely fails by
-	// itself; the query is where a dead server actually shows up. A fake
-	// DB's query fails deterministically (catalog.GetSchema has no case
-	// for it), so after the one Reopen retry also fails the same way,
-	// loadCmd must report the Profile itself as unreachable rather than
-	// leaving a healthy-looking Profile with a buried per-node error.
-	opens := 0
-	pool := &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
-		opens++
-		return fakeLoadDB{}, nil
-	}}
-	root := &node{kind: kindProfile, name: "fake-dev", adapter: "postgres"}
-
-	msg := loadCmd(&cancelSet{}, pool, root, false)().(catalogMsg)
-	if !msg.connectErr {
-		t.Fatalf("got connectErr=false, want true once the retry also failed: %+v", msg)
+func TestLoadCmdDoesNotRetryANonConnectionError(t *testing.T) {
+	// A fake DB's query fails deterministically with an error that is not
+	// connection-class (catalog.GetSchema has no case for it), so it is not
+	// retried. On a Profile's own level it still marks the Profile
+	// unreachable, since that level is the first contact with the server;
+	// one level down it stays on the node.
+	tests := []struct {
+		name        string
+		node        func() *node
+		wantConnect bool
+	}{
+		{"profile level", func() *node { return &node{kind: kindProfile, name: "fake-dev", adapter: "postgres"} }, true},
+		{"database level", func() *node {
+			root := &node{kind: kindProfile, name: "fake-dev", adapter: "postgres"}
+			return &node{kind: kindDatabase, name: "hqdb", profile: "fake-dev", adapter: "postgres", path: []string{"hqdb"}, parent: root}
+		}, false},
 	}
-	if msg.err == nil {
-		t.Fatalf("want a non-nil error")
-	}
-	if opens != 2 {
-		t.Errorf("opener called %d times, want 2 (the initial attempt and the one retry)", opens)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opens := 0
+			pool := &connPool{conns: map[poolKey]adapters.DB{}, open: func(string, string) (adapters.DB, error) {
+				opens++
+				return fakeLoadDB{}, nil
+			}}
+			msg := loadCmd(&cancelSet{}, pool, tt.node(), false)().(catalogMsg)
+			if msg.err == nil {
+				t.Fatalf("want a non-nil error")
+			}
+			if msg.connectErr != tt.wantConnect {
+				t.Errorf("connectErr = %v, want %v", msg.connectErr, tt.wantConnect)
+			}
+			if opens != 1 {
+				t.Errorf("opener called %d times, want 1 (no retry)", opens)
+			}
+		})
 	}
 }
 

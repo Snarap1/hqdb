@@ -58,6 +58,7 @@ type redisKeyMsg struct {
 	val       *redisValue
 	err       error
 	cancelled bool
+	reconnect
 }
 
 // openRedisKeyCmd starts loading the key whose Catalog path (separator-
@@ -70,24 +71,17 @@ func openRedisKeyCmd(pool *connPool, profile string, path []string) (*redisKeyTa
 	ctx, done := t.work.start()
 	cmd := func() tea.Msg {
 		defer done()
-		load := func(conn adapters.DB) (*redisValue, error) {
+		var val *redisValue
+		re, err := pool.run(ctx, poolKey{profile: profile}, func(conn adapters.DB) (bool, error) {
 			rc, ok := conn.(*adapters.Redis)
 			if !ok {
-				return nil, fmt.Errorf("key values are not available for %s", conn.Kind())
+				return false, fmt.Errorf("key values are not available for %s", conn.Kind())
 			}
-			return loadRedisValue(ctx, rc.Redis(), strings.Join(path, rc.Sep()))
-		}
-		conn, err := pool.Open(poolKey{profile: profile})
-		var val *redisValue
-		if err == nil {
-			val, err = load(conn)
-		}
-		if err != nil && ctx.Err() == nil {
-			if conn2, rerr := pool.Reopen(poolKey{profile: profile}); rerr == nil {
-				val, err = load(conn2)
-			}
-		}
-		return redisKeyMsg{tab: t, val: val, err: err, cancelled: ctx.Err() != nil}
+			var err error
+			val, err = loadRedisValue(ctx, rc.Redis(), strings.Join(path, rc.Sep()))
+			return true, err
+		})
+		return redisKeyMsg{tab: t, val: val, err: err, cancelled: ctx.Err() != nil, reconnect: reconnectedTo(profile, re)}
 	}
 	return t, cmd
 }

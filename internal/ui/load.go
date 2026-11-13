@@ -38,6 +38,7 @@ type catalogMsg struct {
 	// connectErr is true when the Profile itself could not be reached,
 	// which marks it broken rather than just this one node.
 	connectErr bool
+	reconnect
 }
 
 // loadCmd returns a tea.Cmd that opens (or reuses) n's Profile connection
@@ -47,12 +48,12 @@ type catalogMsg struct {
 //
 // database/sql connects lazily on first use, not on Open, so a dead server
 // usually only shows up once the query itself runs - there is no separate
-// "the connection failed to open" moment to catch earlier. Whatever fails
-// first (Open or the query) is given one retry against a freshly Reopened
-// connection, which is what lets a connection the server dropped recover on
-// its own; if that retry also fails, the Profile is reported unreachable
-// (connectErr), since by then a plain per-node error and "the server is
-// actually down" are indistinguishable anyway.
+// "the connection failed to open" moment to catch earlier. A query that
+// fails with a connection-class error (isConnError) is given one retry
+// against a freshly Reopened connection, which is what lets a connection
+// the server dropped recover on its own; if that retry also fails, or Open
+// itself fails, the Profile is reported unreachable (connectErr). Any
+// other error stays on its node, except on the Profile's own first level.
 func loadCmd(work *cancelSet, pool *connPool, n *node, loadMore bool) tea.Cmd {
 	ctx, done := work.start()
 	return func() tea.Msg {
@@ -76,26 +77,23 @@ func loadCmd(work *cancelSet, pool *connPool, n *node, loadMore bool) tea.Cmd {
 		var schema *catalog.SchemaOut
 		var cols *catalog.ColumnsOut
 
-		conn, err := pool.Open(poolKey{profile, database})
-		if err == nil {
+		re, err := pool.run(ctx, poolKey{profile, database}, func(conn adapters.DB) (bool, error) {
+			var err error
 			schema, cols, err = query(conn)
-		}
+			return true, err
+		})
 		if err != nil && ctx.Err() != nil {
-			// Cancelled (Ctrl+C): not a connection failure, so no retry and
-			// the Profile is not marked broken.
+			// Cancelled (Ctrl+C): not a connection failure, so the Profile
+			// is not marked broken.
 			return catalogMsg{node: n, err: errCancelled}
 		}
 		if err != nil {
-			conn, rerr := pool.Reopen(poolKey{profile, database})
-			if rerr != nil {
-				return catalogMsg{node: n, err: rerr, connectErr: true}
-			}
-			schema, cols, err = query(conn)
-			if err != nil {
-				return catalogMsg{node: n, err: err, connectErr: true}
-			}
+			// A Profile's own first level is its first contact with the
+			// server, so any failure there marks it unreachable; deeper,
+			// only a connection-class one does.
+			return catalogMsg{node: n, err: err, connectErr: n.kind == kindProfile || isConnError(err)}
 		}
-		return catalogMsg{node: n, schema: schema, columns: cols, loadMore: loadMore}
+		return catalogMsg{node: n, schema: schema, columns: cols, loadMore: loadMore, reconnect: reconnectedTo(profile, re)}
 	}
 }
 

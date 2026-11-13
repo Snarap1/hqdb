@@ -91,6 +91,7 @@ type mongoDataViewMsg struct {
 	documents []any
 	err       error
 	cancelled bool
+	reconnect
 }
 
 // request is the find (or count) request for the tab's Collection with its
@@ -109,42 +110,30 @@ func (t *mongoTab) request(op string) (mongocmd.Request, error) {
 }
 
 // onMongo runs fn on profile's shared mongodb connection, retrying once
-// after Reopen like runOnProfile does for SQL, so a dropped connection
-// recovers without the user doing anything. No retry follows a
-// cancellation, or a failure after fn reported progress (retryable false).
-func onMongo(ctx context.Context, pool *connPool, profile string, fn func(*adapters.Mongo) (retryable bool, err error)) error {
-	run := func(conn adapters.DB) (bool, error) {
+// after Reopen on a connection-class error like runOnProfile does for SQL
+// (connPool.run), so a dropped connection recovers without the user doing
+// anything. No retry follows a cancellation, any other error, or a failure
+// after fn reported progress (retryable false).
+func onMongo(ctx context.Context, pool *connPool, profile string, fn func(*adapters.Mongo) (retryable bool, err error)) (reconnected bool, err error) {
+	return pool.run(ctx, poolKey{profile: profile}, func(conn adapters.DB) (bool, error) {
 		mc, ok := conn.(*adapters.Mongo)
 		if !ok {
 			return false, fmt.Errorf("data view is not available for %s", conn.Kind())
 		}
 		return fn(mc)
-	}
-	conn, err := pool.Open(poolKey{profile: profile})
-	retryable := true
-	if err == nil {
-		retryable, err = run(conn)
-	}
-	if err != nil && retryable && ctx.Err() == nil {
-		conn2, rerr := pool.Reopen(poolKey{profile: profile})
-		if rerr != nil {
-			return err
-		}
-		_, err = run(conn2)
-	}
-	return err
+	})
 }
 
 // runMongo runs req on profile's shared mongodb connection (see onMongo),
 // with Documents in server field order.
-func runMongo(ctx context.Context, pool *connPool, profile string, req mongocmd.Request) (*mongocmd.Result, error) {
+func runMongo(ctx context.Context, pool *connPool, profile string, req mongocmd.Request) (*mongocmd.Result, bool, error) {
 	var res *mongocmd.Result
-	err := onMongo(ctx, pool, profile, func(mc *adapters.Mongo) (bool, error) {
+	re, err := onMongo(ctx, pool, profile, func(mc *adapters.Mongo) (bool, error) {
 		var err error
 		res, err = mongocmd.RunOrdered(ctx, mc, req)
 		return true, err
 	})
-	return res, err
+	return res, re, err
 }
 
 // loadCmd marks the tab loading and returns the tea.Cmd that fetches its
@@ -161,11 +150,11 @@ func (t *mongoTab) loadCmd(pool *connPool) tea.Cmd {
 		if err != nil {
 			return mongoDataViewMsg{tab: t, err: err}
 		}
-		res, err := runMongo(ctx, pool, profile, req)
+		res, re, err := runMongo(ctx, pool, profile, req)
 		if err != nil {
 			return mongoDataViewMsg{tab: t, err: err, cancelled: ctx.Err() != nil}
 		}
-		return mongoDataViewMsg{tab: t, documents: res.Documents}
+		return mongoDataViewMsg{tab: t, documents: res.Documents, reconnect: reconnectedTo(profile, re)}
 	}
 }
 
@@ -199,6 +188,7 @@ type mongoCountMsg struct {
 	total     int64
 	err       error
 	cancelled bool
+	reconnect
 }
 
 func (t *mongoTab) countCmd(pool *connPool) tea.Cmd {
@@ -212,11 +202,11 @@ func (t *mongoTab) countCmd(pool *connPool) tea.Cmd {
 		if err != nil {
 			return mongoCountMsg{tab: t, filter: filter, err: err}
 		}
-		res, err := runMongo(ctx, pool, profile, req)
+		res, re, err := runMongo(ctx, pool, profile, req)
 		if err != nil {
 			return mongoCountMsg{tab: t, filter: filter, err: err, cancelled: ctx.Err() != nil}
 		}
-		return mongoCountMsg{tab: t, filter: filter, total: res.Count}
+		return mongoCountMsg{tab: t, filter: filter, total: res.Count, reconnect: reconnectedTo(profile, re)}
 	}
 }
 
@@ -270,7 +260,7 @@ func (t *mongoTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 		var n int
-		err := onMongo(ctx, pool, profile, func(mc *adapters.Mongo) (bool, error) {
+		_, err := onMongo(ctx, pool, profile, func(mc *adapters.Mongo) (bool, error) {
 			started := false
 			var err error
 			n, err = export.Documents(destPath, format, func(emit func(any) error) error {

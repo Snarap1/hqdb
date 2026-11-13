@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/Snarap1/hqdb/internal/adapters"
 	"github.com/Snarap1/hqdb/internal/ddl"
 )
 
@@ -77,6 +78,7 @@ type ddlMsg struct {
 	out       *ddl.Out
 	err       error
 	cancelled bool
+	reconnect
 }
 
 // openDDLCmd starts loading the DDL of the Table at path on profile,
@@ -96,17 +98,13 @@ func openDDLCmd(pool *connPool, profile, adapter string, path []string) (*ddlTab
 	ctx, done := t.work.start()
 	cmd := func() tea.Msg {
 		defer done()
-		conn, err := pool.Open(poolKey{profile, database})
 		var out *ddl.Out
-		if err == nil {
+		re, err := pool.run(ctx, poolKey{profile, database}, func(conn adapters.DB) (bool, error) {
+			var err error
 			out, err = ddl.GetDDL(ctx, conn, path)
-		}
-		if err != nil && ctx.Err() == nil {
-			if conn2, rerr := pool.Reopen(poolKey{profile, database}); rerr == nil {
-				out, err = ddl.GetDDL(ctx, conn2, path)
-			}
-		}
-		return ddlMsg{tab: t, out: out, err: err, cancelled: ctx.Err() != nil}
+			return true, err
+		})
+		return ddlMsg{tab: t, out: out, err: err, cancelled: ctx.Err() != nil, reconnect: reconnectedTo(profile, re)}
 	}
 	return t, cmd
 }

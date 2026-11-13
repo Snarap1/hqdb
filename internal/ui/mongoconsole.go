@@ -141,7 +141,7 @@ func (t *mongoConsoleTab) execCmd(pool *connPool, stmt string, req mongocmd.Requ
 	profile := t.profile
 	return t.exec(stmt, func(ctx context.Context) tea.Msg {
 		start := time.Now()
-		res, err := runMongo(ctx, pool, profile, req)
+		res, _, err := runMongo(ctx, pool, profile, req)
 		return mongoConsoleMsg{tab: t, op: req.Operation, res: res, took: time.Since(start), err: err, cancelled: ctx.Err() != nil}
 	})
 }
