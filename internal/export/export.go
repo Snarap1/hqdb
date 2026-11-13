@@ -77,26 +77,41 @@ func Query(ctx context.Context, conn Querier, sqlText, destPath, format string, 
 	if err != nil {
 		return 0, err
 	}
+	return writeFile(destPath, func(w *bufio.Writer) (int, error) {
+		switch format {
+		case "csv":
+			return writeCSV(w, rows, columns, limit, transform)
+		case "json":
+			return writeJSONRows(w, rows, columns, limit, transform)
+		case "ndjson":
+			return writeNDJSON(w, rows, columns, limit, transform)
+		}
+		return 0, fmt.Errorf("format must be one of %s (got %q)", strings.Join(Formats, ", "), format)
+	})
+}
+
+// writeBuffer is the size of the buffer between a writer and its file, so
+// a row costs no write syscall of its own.
+const writeBuffer = 64 << 10
+
+// writeFile creates destPath and hands write a buffered writer over it.
+// The buffer is flushed and the file closed whether write fails or not, so
+// a failed export leaves on disk what was written before the failure; the
+// first error wins.
+func writeFile(destPath string, write func(w *bufio.Writer) (int, error)) (int, error) {
 	f, err := os.Create(destPath)
 	if err != nil {
 		return 0, err
 	}
-	var written int
-	var writeErr error
-	switch format {
-	case "csv":
-		written, writeErr = writeCSV(f, rows, columns, limit, transform)
-	case "json":
-		written, writeErr = writeJSONRows(f, rows, columns, limit, transform)
-	case "ndjson":
-		written, writeErr = writeNDJSON(f, rows, columns, limit, transform)
-	default:
-		writeErr = fmt.Errorf("format must be one of %s (got %q)", strings.Join(Formats, ", "), format)
+	bw := bufio.NewWriterSize(f, writeBuffer)
+	n, err := write(bw)
+	if ferr := bw.Flush(); err == nil {
+		err = ferr
 	}
-	if cerr := f.Close(); writeErr == nil {
-		writeErr = cerr
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	return written, writeErr
+	return n, err
 }
 
 // DocumentSource streams Documents to emit, one at a time, and returns
@@ -122,21 +137,12 @@ func Documents(destPath, format string, src DocumentSource) (int, error) {
 	if format == "csv" {
 		return writeDocumentsCSV(destPath, src)
 	}
-	f, err := os.Create(destPath)
-	if err != nil {
-		return 0, err
-	}
-	var n int
-	var writeErr error
-	if format == "json" {
-		n, writeErr = writeDocumentsJSON(f, src)
-	} else {
-		n, writeErr = writeDocumentsNDJSON(f, src, nil)
-	}
-	if cerr := f.Close(); writeErr == nil {
-		writeErr = cerr
-	}
-	return n, writeErr
+	return writeFile(destPath, func(w *bufio.Writer) (int, error) {
+		if format == "json" {
+			return writeDocumentsJSON(w, src)
+		}
+		return writeDocumentsNDJSON(w, src, nil)
+	})
 }
 
 // documentKeys lists one Document's top-level fields in order (a plain
@@ -228,15 +234,15 @@ func writeDocumentsNDJSON(w io.Writer, src DocumentSource, each func(any)) (int,
 	return n, err
 }
 
-func writeDocumentsJSON(f *os.File, src DocumentSource) (int, error) {
-	if _, err := f.WriteString("["); err != nil {
+func writeDocumentsJSON(w *bufio.Writer, src DocumentSource) (int, error) {
+	if _, err := w.WriteString("["); err != nil {
 		return 0, err
 	}
-	enc := json.NewEncoder(f)
+	enc := json.NewEncoder(w)
 	n := 0
 	err := src(func(d any) error {
 		if n > 0 {
-			if _, err := f.WriteString(","); err != nil {
+			if _, err := w.WriteString(","); err != nil {
 				return err
 			}
 		}
@@ -249,7 +255,7 @@ func writeDocumentsJSON(f *os.File, src DocumentSource) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	_, err = f.WriteString("]\n")
+	_, err = w.WriteString("]\n")
 	return n, err
 }
 
@@ -265,7 +271,7 @@ func writeDocumentsCSV(destPath string, src DocumentSource) (n int, err error) {
 		os.Remove(spool.Name())
 	}()
 	var fields fieldSet
-	bw := bufio.NewWriter(spool)
+	bw := bufio.NewWriterSize(spool, writeBuffer)
 	n, err = writeDocumentsNDJSON(bw, src, fields.add)
 	if err == nil {
 		err = bw.Flush()
@@ -276,46 +282,44 @@ func writeDocumentsCSV(destPath string, src DocumentSource) (n int, err error) {
 	if _, err := spool.Seek(0, io.SeekStart); err != nil {
 		return n, err
 	}
-	f, err := os.Create(destPath)
-	if err != nil {
-		return n, err
-	}
-	w := csv.NewWriter(f)
-	columns := fields.fields()
-	err = w.Write(columns)
-	dec := json.NewDecoder(bufio.NewReader(spool))
-	for err == nil {
-		var raw json.RawMessage
-		if derr := dec.Decode(&raw); derr == io.EOF {
-			break
-		} else if derr != nil {
-			err = derr
-			break
+	_, err = writeFile(destPath, func(out *bufio.Writer) (int, error) {
+		w := csv.NewWriter(out)
+		columns := fields.fields()
+		err := w.Write(columns)
+		dec := json.NewDecoder(bufio.NewReaderSize(spool, writeBuffer))
+		for err == nil {
+			var raw json.RawMessage
+			if derr := dec.Decode(&raw); derr == io.EOF {
+				break
+			} else if derr != nil {
+				err = derr
+				break
+			}
+			var d any
+			if d, err = values.DecodeOrdered(raw); err != nil {
+				break
+			}
+			rec := make([]string, len(columns))
+			for i, c := range columns {
+				v, _ := documentField(d, c)
+				rec[i] = stringify(v)
+			}
+			err = w.Write(rec)
 		}
-		var d any
-		if d, err = values.DecodeOrdered(raw); err != nil {
-			break
+		w.Flush()
+		if err == nil {
+			err = w.Error()
 		}
-		rec := make([]string, len(columns))
-		for i, c := range columns {
-			v, _ := documentField(d, c)
-			rec[i] = stringify(v)
-		}
-		err = w.Write(rec)
-	}
-	w.Flush()
-	if err == nil {
-		err = w.Error()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
+		return 0, err
+	})
 	return n, err
 }
 
-// writeCSV writes a header row and one line per row, stringifying every value.
-func writeCSV(f *os.File, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
-	w := csv.NewWriter(f)
+// writeCSV writes a header row and one line per row, stringifying every
+// value. csv.NewWriter reuses w as its buffer, since w is a *bufio.Writer
+// at least as large as the one it would make.
+func writeCSV(w0 *bufio.Writer, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
+	w := csv.NewWriter(w0)
 	if err := w.Write(columns); err != nil {
 		return 0, err
 	}
@@ -334,15 +338,15 @@ func writeCSV(f *os.File, rows *sql.Rows, columns []string, limit int, transform
 }
 
 // writeJSONRows writes a streamed JSON array of row objects.
-func writeJSONRows(f *os.File, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
-	if _, err := f.WriteString("["); err != nil {
+func writeJSONRows(w *bufio.Writer, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
+	if _, err := w.WriteString("["); err != nil {
 		return 0, err
 	}
-	enc := json.NewEncoder(f)
+	enc := json.NewEncoder(w)
 	first := true
 	n, err := streamRows(rows, columns, limit, transform, func(row []any) error {
 		if !first {
-			if _, err := f.WriteString(","); err != nil {
+			if _, err := w.WriteString(","); err != nil {
 				return err
 			}
 		}
@@ -352,13 +356,13 @@ func writeJSONRows(f *os.File, rows *sql.Rows, columns []string, limit int, tran
 	if err != nil {
 		return n, err
 	}
-	_, err = f.WriteString("]\n")
+	_, err = w.WriteString("]\n")
 	return n, err
 }
 
 // writeNDJSON writes one row object per line.
-func writeNDJSON(f *os.File, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
-	enc := json.NewEncoder(f)
+func writeNDJSON(w *bufio.Writer, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
+	enc := json.NewEncoder(w)
 	return streamRows(rows, columns, limit, transform, func(row []any) error {
 		return enc.Encode(sqlrows.Object(columns, row))
 	})
