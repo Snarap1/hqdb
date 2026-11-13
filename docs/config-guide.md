@@ -83,8 +83,9 @@ Any other value fails with `option "access" must be "read-only" or "read-write" 
 | | `read-only` | `read-write` |
 | --- | --- | --- |
 | MCP server (`hqdb mcp`) | screens every statement and refuses writes with `Refused (read-only profile): <reason>` (section 7) | runs statements unscreened |
-| terminal UI Consoles | refuse the same statements with the same reason | ask `This will write to <profile>: ... Run? y/N` before a write |
+| terminal UI Consoles | refuse the same statements with the same reason | ask `This will write to <profile>: ... Run? y/N`, with `why: <reason>` below it, before a write |
 | terminal UI Data view | screens the typed WHERE and ORDER BY | runs them as typed |
+| terminal UI badge | `RO` in the tree and every tab header | `RW`, in the warning color |
 
 Exporting SQL Console results (`e`) reruns the statement, so it is refused on every profile for a statement that writes, such as `DELETE ... RETURNING *`, with `export refused: export reruns the statement, which writes (<reason>)`.
 

@@ -117,35 +117,42 @@ See [`docs/masking.md`](docs/masking.md) for how it behaves and [`docs/config-gu
 hqdb
 ```
 
-The left pane lists every Profile; expand one to browse Databases, Schemas, Tables, Collections, or Redis key prefixes.
-`Enter` on a Table opens its Data view, `d` its DDL, and `c` on a Profile opens a Console.
+The left pane lists every Profile, with its access mode as a badge (`RO` read-only, `RW` read-write); expand one to browse Databases, Schemas, Tables, Collections, or Redis key prefixes.
+The `default_profile` is selected on start.
+`Enter` on a Table opens its Data view, or focuses it when it is already open; `l` lists the Table's Columns, `d` opens its DDL, and `c` on a Profile opens a Console.
+Every tab's header repeats the Profile's access badge.
 Console buffers and statement history persist per Profile under `$XDG_STATE_HOME/hqdb`.
-Single-letter keys work only when focus is not in a text field; `Esc` leaves a text field, and `?` shows every binding.
+Single-letter keys work only when focus is not in a text field; `Esc` leaves a text field, and `?` shows every binding, the focused pane's group first.
+The status bar keeps `? keys` and `q quit` at its right end and shows short notices (a copy, an export, a reconnect, a refusal) for three seconds.
 
 | Scope | Key | Action |
 |---|---|---|
 | global | `z` | hide or show the tree |
 | global | `Tab` / `Shift+Tab` | move focus between tree and active tab |
-| global | `[` / `]` | previous or next tab |
+| global | `[` / `]` | previous or next tab (the tab bar marks hidden tabs with `‹ N` / `N ›`) |
+| global | `Alt+1` .. `Alt+9` | go to tab N |
 | global | `x` | close the active tab |
-| global | `?` | keymap help |
-| global | `q` | quit |
+| global | `?` | keymap help (scroll with arrows, `PgUp`/`PgDn`, `g`/`G`) |
+| global | `q` | quit; while a query or export runs it asks first, and `y` quits |
 | global | `Ctrl+C` | cancel the running work in the focused pane (never quits) |
-| tree | `Up`/`k`, `Down`/`j` | move the selection |
-| tree | `Enter` / double-click | expand, or open the Data view on a Table |
-| tree | `Right`/`l`, `Left`/`h` | expand or step into the first child; collapse or step to the parent |
+| global | mouse wheel | scroll the pane under the pointer |
+| tree | `Up`/`k`, `Down`/`j` | move the selection (it stops at either end) |
+| tree | `PgUp` / `PgDn`, `g`/`Home`, `G`/`End` | move a screenful, to the first or last row |
+| tree | `Enter` / double-click | open the Data view of a Table or key (focusing an open one), or expand anything else |
+| tree | `Right`/`l`, `Left`/`h` | expand (a Table: list its Columns) or step into the first child; collapse or step to the parent |
 | tree | `d` | DDL of the Table |
 | tree | `c` | Console of the Profile |
 | tree | `r` | refresh the node or reconnect the Profile |
 | tree | `D` | disconnect the Profile |
 | tree | `/` | filter nodes by name |
 | Data view | `f` / `o` | focus WHERE (Filter) / ORDER BY (Sort) |
-| Data view | `n` / `p` | next / previous page |
+| Data view | `n` / `p` | next / previous page (`n` stops at a short, last page) |
 | Data view | `s` | page size |
 | Data view | `#` | count matching rows |
 | Data view, SQL Console results | `e` | export to csv, json, or ndjson |
 | mongodb Data view, mongodb Console results | `v` | toggle cards / grid |
 | grid | arrows, `h`/`j`/`k`/`l` | move the cell cursor |
+| grid, cards, DDL | `PgUp` / `PgDn`, `g`/`Home`, `G`/`End` | move a screenful, to the first or last row |
 | grid | `/` | search in the loaded page |
 | grid | `Ctrl+N` / `Ctrl+P` | next / previous search match |
 | grid | `Enter` / double-click | cell popup |
@@ -153,6 +160,8 @@ Single-letter keys work only when focus is not in a text field; `Esc` leaves a t
 | grid, cards | `y` | copy cell (cards: the field, or the whole Document on its header) |
 | grid, cards | `Y` | copy row (cards: Document) as JSON |
 | Console | `Alt+Enter` | run the statement under the cursor (Redis: the line) |
+| Console | `y` | run a write the confirmation asks about (it names why the statement writes); any other key cancels |
+| Console results | `Enter` | open the full error in a popup (an error wraps over up to three status lines) |
 | Console editor | `Ctrl+Up` / `Ctrl+Down` | older / newer statement from history |
 | Console editor | `Esc` | leave the editor for the results |
 | Console results | `i` | back into the editor |
