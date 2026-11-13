@@ -352,6 +352,45 @@ func TestFind(t *testing.T) {
 	}
 }
 
+// phoneList joins n distinct phones of the given format (the %d is the
+// last digit, so n is at most 10) with sep.
+func phoneList(format, sep string, n int) (string, []string) {
+	var phones, want []string
+	for i := 0; i < n; i++ {
+		p := fmt.Sprintf(format, i)
+		phones = append(phones, p)
+		want = append(want, "phone:"+p)
+	}
+	return "Phones: " + strings.Join(phones, sep) + ".", want
+}
+
+// Phones written one after another with only separators between them
+// form one long candidate run; every phone in it must still be found.
+func TestFindPhoneLists(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+		sep    string
+		n      int
+	}{
+		{"1 national", "8 916 123-45-6%d", " ", 1},
+		{"5 national by spaces", "8 916 123-45-6%d", " ", 5},
+		{"10 national by spaces", "8 916 123-45-6%d", " ", 10},
+		{"10 national by dashes", "8 916 123-45-6%d", " - ", 10},
+		{"5 international by spaces", "+7 916 123 45 6%d", " ", 5},
+		{"10 international by spaces", "+7 916 123 45 6%d", " ", 10},
+		{"10 german by commas", "030 901820%d", ", ", 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text, want := phoneList(tt.format, tt.sep, tt.n)
+			if got := found(text); !reflect.DeepEqual(got, want) {
+				t.Errorf("Find(%q)\n got %q\nwant %q", text, got, want)
+			}
+		})
+	}
+}
+
 func TestFindSortedNonOverlappingWithByteOffsets(t *testing.T) {
 	text := "Ёж: a@b.co, 4111 1111 1111 1111, +49 30 901820, 10.0.0.1, 65929970489, я"
 	spans := Find(text)

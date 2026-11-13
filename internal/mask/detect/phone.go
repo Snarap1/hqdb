@@ -80,10 +80,19 @@ func phoneDetector() detector {
 	}
 }
 
+// maxPhoneWindow is the longest window phoneFind proposes, in bytes. A
+// phone has at most 15 digits, so 64 bytes leaves room for a separator of
+// up to three bytes between every two digits plus the prefix and
+// parentheses; it keeps the work per run linear when a run is padded with
+// separators and parentheses.
+const maxPhoneWindow = 64
+
 // phoneFind proposes every window of separator-joined digit groups inside
 // each phone-looking run, so "call 030 1234567 12" can still find the
 // number inside a longer run; Find keeps the longest valid, non-overlapping
-// windows.
+// windows. Only windows of 8 to 15 digits are proposed, the range the
+// phone policy accepts, so a run of many phones joined by spaces or
+// dashes still yields every phone in it.
 func phoneFind(text string) [][2]int {
 	var out [][2]int
 	for _, loc := range phoneCand.FindAllStringIndex(text, -1) {
@@ -91,27 +100,46 @@ func phoneFind(text string) [][2]int {
 		if countDigits(cand) < 8 {
 			continue
 		}
-		starts, ends := []int{0}, []int{len(cand)}
+		// digits[i] is the number of digits in cand[:i]. A window starts
+		// at the run start or after a separator and ends at the run end or
+		// before one, never on the separator itself.
+		digits := make([]int, len(cand)+1)
+		starts, ends := []int{0}, []int(nil)
 		for i := 0; i < len(cand); i++ {
-			if cand[i] == ' ' || cand[i] == '-' {
-				ends = append(ends, i)
-				starts = append(starts, i+1)
+			digits[i+1] = digits[i]
+			switch c := cand[i]; {
+			case isDigitByte(c):
+				digits[i+1]++
+			case c == ' ' || c == '-':
+				if i > 0 && !isPhoneSep(cand[i-1]) {
+					ends = append(ends, i)
+				}
+				if i+1 < len(cand) && !isPhoneSep(cand[i+1]) {
+					starts = append(starts, i+1)
+				}
 			}
 		}
-		if len(starts)*len(ends) > 400 {
-			continue
-		}
+		ends = append(ends, len(cand))
+		first := 0 // the first end after the current start
 		for _, st := range starts {
-			for _, en := range ends {
-				if en <= st || cand[st] == ' ' || cand[st] == '-' || cand[en-1] == ' ' || cand[en-1] == '-' {
-					continue
+			for first < len(ends) && ends[first] <= st {
+				first++
+			}
+			for _, en := range ends[first:] {
+				n := digits[en] - digits[st]
+				if n > 15 || en-st > maxPhoneWindow {
+					break
 				}
-				out = append(out, [2]int{loc[0] + st, loc[0] + en})
+				if n >= 8 {
+					out = append(out, [2]int{loc[0] + st, loc[0] + en})
+				}
 			}
 		}
 	}
 	return out
 }
+
+func isPhoneSep(c byte) bool { return c == ' ' || c == '-' }
 
 func countDigits(s string) int {
 	n := 0

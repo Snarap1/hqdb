@@ -68,6 +68,7 @@ An ID without a checksum, or in a format too common to tell apart from other num
 
 A phone is detected only when it has a `+` or `00` prefix, or is a national number of DE, FR, UA, RU, KZ, BY, or UZ with its trunk prefix; a bare digit string such as `4915112345678` is never a phone.
 A phone stored as a bare integer is therefore caught by its column name only.
+In free text, every phone of a list is found, however many phones are joined by spaces or dashes (`8 916 123-45-67 8 916 123-45-68 ...`).
 
 ## Statements with markers are refused
 
