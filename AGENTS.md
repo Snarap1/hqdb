@@ -28,6 +28,7 @@ Masking (ADR-0005) lives in `internal/server` only, through `internal/mask`; the
 
 The MCP server keeps a **connection pool** (`internal/server/pool.go`, ADR-0006): keyed by Profile, Database, and a hash of the Profile table, one checkout per call, 60 s idle TTL; config, Access mode, and Masker are still resolved on every call.
 After a statement hqdb did not write (`opened.ranStatement`), the connection is reset when the call ends (`adapters.ResetSession`: postgres `DISCARD ALL`, mssql TDS reset) or closed where the adapter cannot reset (mysql, clickhouse native, redis off the allowlist; `adapters.ResetsSession`).
+Every successful MCP handler returns `lean(req, out, summarize...(out))` (`internal/server/results.go`, ADR-0007): the text content is a value-free summary for clients that read `structuredContent` (`--result-text auto` detects Claude Code), else the SDK's full JSON.
 The terminal UI keeps one lazy connection per (Profile, Database) pair (`internal/ui/pool.go`; a postgres Profile without `dbname` discovers its Databases, ADR-0004) plus a dedicated session per SQL Console, bound to one Database.
 Every terminal UI tab kind implements the `tab` interface (`internal/ui/tab.go`); `adapterui.go` is the one per-Adapter dispatch table.
 Visual design follows `docs/ui/TUI database client.html`; colors live only in `theme.go`.

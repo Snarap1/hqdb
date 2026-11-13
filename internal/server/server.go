@@ -22,10 +22,12 @@ import (
 )
 
 // Serve runs the stdio MCP server until the transport closes or ctx is
-// done, reporting version in the MCP implementation handshake.
-func Serve(ctx context.Context, version string) error {
+// done, reporting version in the MCP implementation handshake; text
+// decides the text content of successful results (ADR-0007).
+func Serve(ctx context.Context, version string, text ResultText) error {
 	server := mcp.NewServer(&mcp.Implementation{Name: "hqdb", Version: version}, nil)
 	maskKey = mask.NewKey()
+	resultText = text
 	pool = newConnPool(poolIdleTTL, poolMaxIdle, time.Now)
 	stop := make(chan struct{})
 	go pool.run(poolIdleTTL/4, stop)
@@ -179,7 +181,7 @@ func listProfiles(ctx context.Context, req *mcp.CallToolRequest, in listProfiles
 			Masked:    masked,
 		})
 	}
-	return nil, out, nil
+	return lean(req, out, summarizeProfiles(out)), out, nil
 }
 
 type getSchemaIn struct {
@@ -201,7 +203,7 @@ func getSchemaTool(ctx context.Context, req *mcp.CallToolRequest, in getSchemaIn
 	if err != nil {
 		return nil, catalog.SchemaOut{}, err
 	}
-	return nil, *out, nil
+	return lean(req, out, summarizeSchema(*out)), *out, nil
 }
 
 type getColumnsIn struct {
@@ -221,7 +223,7 @@ func getColumnsTool(ctx context.Context, req *mcp.CallToolRequest, in getColumns
 	if err != nil {
 		return nil, catalog.ColumnsOut{}, err
 	}
-	return nil, *out, nil
+	return lean(req, out, summarizeColumns(*out)), *out, nil
 }
 
 type getDdlIn struct {
@@ -244,7 +246,7 @@ func getDdlTool(ctx context.Context, req *mcp.CallToolRequest, in getDdlIn) (_ *
 	if m != nil {
 		out.Definition = m.Text(out.Definition)
 	}
-	return nil, *out, nil
+	return lean(req, out, summarizeDDL(*out)), *out, nil
 }
 
 type runQueryIn struct {
@@ -300,7 +302,7 @@ func runQueryTool(ctx context.Context, req *mcp.CallToolRequest, in runQueryIn) 
 		Truncated:     res.Truncated,
 		MaskedColumns: maskedColumns,
 	}
-	return nil, out, nil
+	return lean(req, out, summarizeQuery(out)), out, nil
 }
 
 type runRedisIn struct {
@@ -341,7 +343,7 @@ func runRedisTool(ctx context.Context, req *mcp.CallToolRequest, in runRedisIn) 
 		return nil, RunRedisOut{}, err
 	}
 	out := RunRedisOut{Command: strings.TrimSpace(in.Command), Result: maskRedis(m, in.Command, result)}
-	return nil, out, nil
+	return lean(req, out, summarizeRedis(out)), out, nil
 }
 
 type runMongoIn struct {
@@ -420,7 +422,7 @@ func runMongoTool(ctx context.Context, req *mcp.CallToolRequest, in runMongoIn) 
 	}
 	docs, maskedFields := maskMongo(m, op, in.Field, res.Documents)
 	out := RunMongoOut{Operation: op, Documents: docs, Count: res.Count, Truncated: res.Truncated, MaskedFields: maskedFields}
-	return nil, out, nil
+	return lean(req, out, summarizeMongo(out)), out, nil
 }
 
 type exportQueryIn struct {
@@ -470,7 +472,7 @@ func exportQueryTool(ctx context.Context, req *mcp.CallToolRequest, in exportQue
 		return nil, ExportQueryOut{}, err
 	}
 	out := ExportQueryOut{Path: in.DestPath, Format: format, RowCount: n}
-	return nil, out, nil
+	return lean(req, out, summarizeExport(out)), out, nil
 }
 
 // maskNote ends the description of every tool that returns data or takes a

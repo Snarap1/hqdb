@@ -183,6 +183,7 @@ A postgres Profile discovers every Database the login may connect to; `dbname` o
 `get_columns` and `get_ddl` take the Database as the first `path` element, and `run_query` and `export_query` take an optional `database` argument (`dbname`, else the login's default, when omitted).
 Each statement runs inside one Database, never across two; the database account's privileges stay the real boundary, and behind PgBouncer a listed Database may fail to open.
 No `LIMIT` is injected into SQL; the `limit` argument bounds the response (default 50).
+Results come back as `structuredContent` with an output schema; Claude Code also gets a one-line summary as text, and every other client the JSON again, unless `hqdb mcp --result-text summary|json` says otherwise ([guide](docs/config-guide.md#6-register-with-a-client)).
 
 Register it with Claude Code:
 

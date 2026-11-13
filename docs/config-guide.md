@@ -324,7 +324,21 @@ env = { HQDB_CONFIG = "/abs/path/to/hqdb.toml" }
 
 Cursor uses `.cursor/mcp.json` with the same JSON payload as `.mcp.json`.
 Gemini, OpenCode, and Copilot also take a stdio server with a `command`, `args`, and an `env` map; only the file name differs.
-Whatever the client, the server is `hqdb` with the single argument `mcp`; plain `hqdb` opens the terminal UI and never speaks MCP.
+Whatever the client, the server is `hqdb` with the argument `mcp`; plain `hqdb` opens the terminal UI and never speaks MCP.
+
+Every tool returns its data as `structuredContent`, checked against the tool's output schema.
+The text content beside it depends on `--result-text` ([ADR-0007](adr/0007-lean-tool-results.md)):
+
+| `--result-text` | text content |
+| --- | --- |
+| `auto` (default) | a one-line summary for Claude Code, which hands `structuredContent` to the model; the full JSON for every other client |
+| `summary` | always the summary, for example `42 rows, 3 columns: id, email, status; the data is in structuredContent` |
+| `json` | always the full JSON, a second copy of `structuredContent` |
+
+A summary names counts, columns, and masked columns, never a value.
+A result over 1 MiB of JSON keeps the full JSON as text even in summary mode, because Claude Code leaves such a `structuredContent` off the message and keeps only the text.
+Pass `--result-text summary` to a client that reads `structuredContent` but is not detected (`"args": ["mcp", "--result-text", "summary"]`), and `--result-text json` when a client shows only the summary.
+Cursor, for one, gives the model only the text content, which is why `auto` sends it the JSON.
 Point `command` at the absolute path of the built binary: the process is spawned directly, without a login shell, so a relative path or shell alias never resolves.
 
 With [APM](https://microsoft.github.io/apm/) installed, the same registration comes from the package in this repository, which declares only the server:

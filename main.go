@@ -30,7 +30,8 @@ const usage = `hqdb - terminal database client for humans and AI agents
 
 Usage:
   hqdb                      open the terminal UI
-  hqdb mcp                  serve the Profiles to an AI agent over MCP (stdio)
+  hqdb mcp [--result-text auto|summary|json]
+                            serve the Profiles to an AI agent over MCP (stdio)
   hqdb check [flags] [profile ...]
                             validate the config and probe each Profile
   hqdb version              print the version
@@ -49,7 +50,7 @@ func run(args []string) int {
 	}
 	switch args[0] {
 	case "mcp":
-		return runMCP()
+		return runMCP(args[1:])
 	case "check":
 		return runCheck(args[1:])
 	case "version", "--version", "-v":
@@ -76,11 +77,23 @@ func runTUI() int {
 	return 0
 }
 
-func runMCP() int {
+func runMCP(args []string) int {
 	// stdout is the MCP protocol channel: every diagnostic goes to stderr.
 	log.SetOutput(os.Stderr)
 	log.SetFlags(0)
-	if err := server.Serve(context.Background(), currentVersion()); err != nil {
+	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	resultText := fs.String("result-text", string(server.ResultTextAuto), "text content of a tool result: auto, summary, or json")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "hqdb mcp: %v\nusage: hqdb mcp [--result-text auto|summary|json]\n", err)
+		return 2
+	}
+	text, err := server.ParseResultText(*resultText)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hqdb mcp: %v\n", err)
+		return 2
+	}
+	if err := server.Serve(context.Background(), currentVersion(), text); err != nil {
 		log.Printf("hqdb: %v", err)
 		return 1
 	}
