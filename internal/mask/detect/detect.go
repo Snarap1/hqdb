@@ -50,21 +50,36 @@ const (
 )
 
 // Span is one detected value inside a text, as byte offsets with End
-// exclusive.
+// exclusive, and its normal form (Normalize of the value).
 type Span struct {
 	Start, End int
 	Kind       Kind
+	Normal     string
 }
 
 // detector recognizes one kind.
 // match judges a whole trimmed value; each finder proposes candidate byte
 // ranges in a text, which Find then checks for word boundaries and with
 // match. rawMatch is match without prefilters; the tests compare the two.
+// normal, when set, is match and Normalize in one pass (a phone is
+// validated by libphonenumber once, not twice).
 type detector struct {
 	kind     Kind
 	match    func(s string) bool
 	rawMatch func(s string) bool
+	normal   func(s string) (string, bool)
 	finders  []finder
+}
+
+// matchNormal is match plus the normal form of s.
+func (d *detector) matchNormal(s string) (string, bool) {
+	if d.normal != nil {
+		return d.normal(s)
+	}
+	if !d.match(s) {
+		return "", false
+	}
+	return Normalize(d.kind, s), true
 }
 
 // shaped builds a detector from regular-expression shapes (the textual
@@ -154,6 +169,15 @@ var detectors = []detector{
 	uaRNOKPPDetector(), // 10 digits
 }
 
+// MinIntegerDigits is the fewest digits the decimal form of an integer
+// (digits with an optional leading '-', no leading zero) needs for any
+// detector to accept it. Below it, the phone policy refuses the value
+// (it needs a "+", a "00" prefix, or 9 digits with the trunk prefix), and
+// every other kind needs letters, separators, or 10 or more digits.
+// TestMinIntegerDigits checks this against the derived prefilters and
+// with Match.
+const MinIntegerDigits = 9
+
 // Match reports whether the whole trimmed s is one detected value, and
 // of which kind.
 func Match(s string) (Kind, bool) {
@@ -161,12 +185,26 @@ func Match(s string) (Kind, bool) {
 	if s == "" {
 		return "", false
 	}
-	for _, d := range detectors {
-		if d.match(s) {
-			return d.kind, true
+	for i := range detectors {
+		if detectors[i].match(s) {
+			return detectors[i].kind, true
 		}
 	}
 	return "", false
+}
+
+// MatchNormal is Match plus Normalize of s in one pass.
+func MatchNormal(s string) (Kind, string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", "", false
+	}
+	for i := range detectors {
+		if normal, ok := detectors[i].matchNormal(s); ok {
+			return detectors[i].kind, normal, true
+		}
+	}
+	return "", "", false
 }
 
 type candidate struct {
@@ -219,10 +257,14 @@ func Find(text string) []Span {
 	add := func(prio int, loc [2]int) {
 		d := &detectors[prio]
 		s, e := loc[0], loc[1]
-		if e <= s || !bounded(text, s, e) || !d.match(text[s:e]) {
+		if e <= s || !bounded(text, s, e) {
 			return
 		}
-		cands = append(cands, candidate{Span{s, e, d.kind}, prio})
+		normal, ok := d.matchNormal(text[s:e])
+		if !ok {
+			return
+		}
+		cands = append(cands, candidate{Span{s, e, d.kind, normal}, prio})
 	}
 	for _, g := range finderGroups {
 		if g.alpha == nil {

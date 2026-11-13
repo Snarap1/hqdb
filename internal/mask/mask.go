@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"path"
 	"sort"
 	"strconv"
@@ -20,11 +21,22 @@ import (
 )
 
 // Masker masks values under one key and one set of user name rules.
+// A Masker is not safe for concurrent use: it caches name classes and
+// reuses one HMAC. The server builds a fresh one per tool call.
 type Masker struct {
 	key     []byte
 	columns []string
 	allow   []string
+
+	names map[string]nameClass // classify results by single name
+	paths map[string]nameClass // classify results by pathKey
+	mac   hash.Hash            // HMAC-SHA256 under key, reset per marker
+	sum   []byte
 }
+
+// maxCachedClasses bounds each classify cache; a Document stream with
+// unbounded distinct field names stops caching at this size.
+const maxCachedClasses = 4096
 
 // NewKey returns 32 random bytes. The server creates it once per process
 // and never writes it anywhere.
@@ -109,6 +121,37 @@ func (m *Masker) classify(segs []string) nameClass {
 	if len(segs) == 0 {
 		return classNone
 	}
+	cache, key := &m.names, segs[0]
+	if len(segs) > 1 {
+		cache, key = &m.paths, pathKey(segs)
+	}
+	if c, ok := (*cache)[key]; ok {
+		return c
+	}
+	c := m.classifyNames(segs)
+	if *cache == nil {
+		*cache = map[string]nameClass{}
+	}
+	if len(*cache) < maxCachedClasses {
+		(*cache)[key] = c
+	}
+	return c
+}
+
+// pathKey is the cache key of a path of two or more segments: each
+// segment prefixed with its length and a NUL, so two different paths
+// never share a key.
+func pathKey(segs []string) string {
+	var b strings.Builder
+	for _, s := range segs {
+		b.WriteString(strconv.Itoa(len(s)))
+		b.WriteByte(0)
+		b.WriteString(s)
+	}
+	return b.String()
+}
+
+func (m *Masker) classifyNames(segs []string) nameClass {
 	norms := make([]string, len(segs))
 	for i, s := range segs {
 		norms[i] = normalizeName(s)
@@ -228,7 +271,7 @@ func (m *Masker) replaceSpans(s string) (string, bool) {
 			continue
 		}
 		b.WriteString(s[pos:sp.Start])
-		b.WriteString(m.marker(detect.Normalize(sp.Kind, s[sp.Start:sp.End])))
+		b.WriteString(m.marker(sp.Normal))
 		pos = sp.End
 		changed = true
 	}
@@ -307,23 +350,29 @@ func (m *Masker) node(segs []string, v any, paths map[string]bool) (any, bool) {
 	case string:
 		return m.maskString(segs, c, paths)
 	default:
-		if s, ok := integerString(v); ok {
-			if _, ok := detect.Match(s); ok {
+		if s, ok := integerString(v); ok && !tooShortForDetectors(s) {
+			if _, normal, ok := detect.MatchNormal(s); ok {
 				record()
-				return m.marker(m.hashText(v)), true
+				return m.marker(normal), true
 			}
 		}
 	}
 	return v, false
 }
 
+// tooShortForDetectors reports whether the decimal form of an integer
+// has too few digits for any detector, so Match can be skipped.
+func tooShortForDetectors(integer string) bool {
+	return len(strings.TrimPrefix(integer, "-")) < detect.MinIntegerDigits
+}
+
 // maskString applies the value rules 5 to 7 to a string outside a name rule.
 func (m *Masker) maskString(segs []string, s string, paths map[string]bool) (any, bool) {
-	if kind, ok := detect.Match(s); ok {
+	if _, normal, ok := detect.MatchNormal(s); ok {
 		if paths != nil {
 			paths[strings.Join(segs, ".")] = true
 		}
-		return m.marker(detect.Normalize(kind, s)), true
+		return m.marker(normal), true
 	}
 	if t := strings.TrimSpace(s); strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
 		if decoded, err := values.DecodeOrdered([]byte(t)); err == nil {
@@ -346,8 +395,8 @@ func (m *Masker) maskString(segs []string, s string, paths map[string]bool) (any
 // case-folded string form.
 func (m *Masker) hashText(v any) string {
 	s := stringForm(v)
-	if kind, ok := detect.Match(s); ok {
-		return detect.Normalize(kind, s)
+	if _, normal, ok := detect.MatchNormal(s); ok {
+		return normal
 	}
 	return foldText(s)
 }

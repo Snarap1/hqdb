@@ -119,8 +119,10 @@ func cardDetector() detector {
 	)
 }
 
+var cardSeparators = strings.NewReplacer(" ", "", "-", "")
+
 func validCard(s string) bool {
-	d := strings.NewReplacer(" ", "", "-", "").Replace(s)
+	d := cardSeparators.Replace(s)
 	if len(d) < 14 || len(d) > 19 || !isDigits(d) {
 		return false
 	}

@@ -78,6 +78,7 @@ func phoneDetector() detector {
 		kind:     Phone,
 		match:    match,
 		rawMatch: match,
+		normal:   phoneE164,
 		finders:  candidateFinder(phoneCand, phoneFind),
 	}
 }

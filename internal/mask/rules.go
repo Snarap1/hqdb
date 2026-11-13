@@ -50,15 +50,17 @@ syndicat
 `
 
 // ruleSet is a set of token-sequence rules plus exact whole-name rules.
+// The sequences are indexed by their first token.
 type ruleSet struct {
-	seqs  [][]string
+	seqs  map[string][][]string
 	exact map[string]bool
 }
 
 func newRuleSet(tokenRules, exactRules string) ruleSet {
-	rs := ruleSet{exact: map[string]bool{}}
+	rs := ruleSet{seqs: map[string][][]string{}, exact: map[string]bool{}}
 	for _, r := range strings.Fields(tokenRules) {
-		rs.seqs = append(rs.seqs, strings.Split(normalizeName(r), "_"))
+		seq := strings.Split(normalizeName(r), "_")
+		rs.seqs[seq[0]] = append(rs.seqs[seq[0]], seq)
 	}
 	for _, r := range strings.Fields(exactRules) {
 		rs.exact[normalizeName(r)] = true
@@ -66,7 +68,9 @@ func newRuleSet(tokenRules, exactRules string) ruleSet {
 	return rs
 }
 
-// matches reports whether the normalized name is hit by a rule.
+// matches reports whether the normalized name is hit by a rule: the
+// whole name is an exact rule, or the tokens of a sequence rule occur as
+// a contiguous run of the name's tokens.
 func (rs ruleSet) matches(name string) bool {
 	if name == "" {
 		return false
@@ -75,28 +79,27 @@ func (rs ruleSet) matches(name string) bool {
 		return true
 	}
 	tokens := strings.Split(name, "_")
-	for _, seq := range rs.seqs {
-		if containsRun(tokens, seq) {
-			return true
+	for i, tok := range tokens {
+		for _, seq := range rs.seqs[tok] {
+			if hasRunAt(tokens, seq, i) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func containsRun(tokens, seq []string) bool {
-	for i := 0; i+len(seq) <= len(tokens); i++ {
-		ok := true
-		for j, t := range seq {
-			if tokens[i+j] != t {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			return true
+// hasRunAt reports whether seq occurs in tokens starting at i.
+func hasRunAt(tokens, seq []string, i int) bool {
+	if i+len(seq) > len(tokens) {
+		return false
+	}
+	for j, t := range seq {
+		if tokens[i+j] != t {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 var (

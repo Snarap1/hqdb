@@ -3,6 +3,7 @@ package detect
 import (
 	"math/rand"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -75,8 +76,62 @@ func TestEveryFinderIsFiltered(t *testing.T) {
 	}
 }
 
+// shortIntegerFits reports whether p may admit the decimal form of an
+// integer with fewer than MinIntegerDigits digits: at most
+// MinIntegerDigits-1 digits and one leading '-'.
+func shortIntegerFits(p prefilter) bool {
+	if p.alpha == nil {
+		return true
+	}
+	if !p.alpha['0'] || p.minLen > MinIntegerDigits {
+		return false
+	}
+	for _, n := range p.needs {
+		most := 0
+		if n.set['0'] {
+			most += MinIntegerDigits - 1
+		}
+		if n.set['-'] && p.alpha['-'] {
+			most++
+		}
+		if most < n.min {
+			return false
+		}
+	}
+	return true
+}
+
+func TestMinIntegerDigits(t *testing.T) {
+	// Every shape but the phone candidate run is refused by its prefilter
+	// alone; the phone policy itself refuses fewer than 9 digits without
+	// a "+" or "00" prefix, which an integer cannot carry.
+	for _, d := range detectors {
+		for i, f := range d.finders {
+			if shortIntegerFits(f.pf) && d.kind != Phone {
+				t.Errorf("%s finder %d (%s) may admit a short integer", d.kind, i, f.pf.alpha)
+			}
+		}
+	}
+	check := func(n int64) {
+		s := strconv.FormatInt(n, 10)
+		if k, ok := Match(s); ok {
+			t.Fatalf("Match(%s) = %s, want no match below %d digits", s, k, MinIntegerDigits)
+		}
+	}
+	for _, n := range []int64{0, 1, 9, 10, 99999999, 10000000, 89161234, 49301234, 38012345} {
+		check(n)
+		check(-n)
+	}
+	r := rand.New(rand.NewSource(1))
+	for i := 0; i < 20000; i++ {
+		n := r.Int63n(100000000)
+		check(n)
+		check(-n)
+	}
+}
+
 // rawFind is Find without prefilters: every finder on the whole text,
-// every candidate checked with rawMatch.
+// every candidate checked with rawMatch and normalized with Normalize.
 func rawFind(text string) []Span {
 	var cands []candidate
 	for prio, d := range detectors {
@@ -86,7 +141,7 @@ func rawFind(text string) []Span {
 				if e <= s || !bounded(text, s, e) || !d.rawMatch(text[s:e]) {
 					continue
 				}
-				cands = append(cands, candidate{Span{s, e, d.kind}, prio})
+				cands = append(cands, candidate{Span{s, e, d.kind, Normalize(d.kind, text[s:e])}, prio})
 			}
 		}
 	}
@@ -115,6 +170,10 @@ func checkPrefilterEquivalence(t *testing.T, s string) {
 	wk, wok := rawMatchKind(s)
 	if gk != wk || gok != wok {
 		t.Fatalf("Match(%q) = %q, %v; unfiltered %q, %v", s, gk, gok, wk, wok)
+	}
+	nk, normal, nok := MatchNormal(s)
+	if nk != wk || nok != wok || nok && normal != Normalize(wk, s) {
+		t.Fatalf("MatchNormal(%q) = %q, %q, %v; want %q, %q, %v", s, nk, normal, nok, wk, Normalize(wk, s), wok)
 	}
 }
 
