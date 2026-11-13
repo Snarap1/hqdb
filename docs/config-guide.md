@@ -86,6 +86,8 @@ Any other value fails with `option "access" must be "read-only" or "read-write" 
 | terminal UI Consoles | refuse the same statements with the same reason | ask `This will write to <profile>: ... Run? y/N` before a write |
 | terminal UI Data view | screens the typed WHERE and ORDER BY | runs them as typed |
 
+Exporting SQL Console results (`e`) reruns the statement, so it is refused on every profile for a statement that writes, such as `DELETE ... RETURNING *`, with `export refused: export reruns the statement, which writes (<reason>)`.
+
 ```toml
 [profiles.dev-pg]
 adapter = "postgres"

@@ -91,6 +91,8 @@ It exits non-zero on any failure, so it drops into CI too.
 | Terminal UI Consoles | Refuses the same statements with the same reason | Asks `This will write to <profile>: ... Run? y/N` before a write |
 | Terminal UI Data view | Screens the typed WHERE and ORDER BY | Runs them as typed |
 
+Exporting SQL Console results (`e`) reruns the statement, so it is refused on every Profile for a statement that writes, such as `DELETE ... RETURNING *`.
+
 The screening for SQL is defense in depth: the statement must start with `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, `DESCRIBE`, `DESC`, or `TABLE`, stacked statements are refused, and no write keyword (`insert`, `update`, `delete`, `drop`, `truncate`, `alter`, `create`, `call`, ...) may appear outside comments and strings.
 Redis is default-deny: allowlisted read commands only.
 MongoDB refuses the writing operations `insertOne`, `insertMany`, `updateOne`, and `deleteOne`, and the writing aggregation stages `$out` and `$merge`.

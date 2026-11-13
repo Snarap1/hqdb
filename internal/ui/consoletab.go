@@ -134,7 +134,8 @@ func (s *consoleSession) dropIfCancelled(ctx context.Context) bool {
 
 // export reruns stmt on the pinned session, streaming every row (no
 // preview limit) into destPath through the same core export.Query the MCP
-// export_query tool uses; stmt already passed runCmd's screening.
+// export_query tool uses, unscreened; consoleTab.exportCmd refuses a
+// statement that writes before it gets here.
 func (s *consoleSession) export(ctx context.Context, pool *connPool, stmt, destPath, format string) (n int, reset bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -170,7 +171,7 @@ type consoleTab struct {
 	grid    grid
 
 	// lastStmt is the statement whose rows the grid shows, which is what
-	// export reruns.
+	// export reruns (only when it reads: see exportRefusal).
 	lastStmt string
 	// exporting is true while the export destination field has focus;
 	// exportInput is its text, exportStatus the last export's outcome.
@@ -297,8 +298,26 @@ func (t *consoleTab) execCmd(pool *connPool, stmt string) tea.Cmd {
 	})
 }
 
-// exportCmd exports the grid's statement to destPath.
+// exportRefusal is why the grid's statement cannot be exported, "" when
+// it can. Export reruns the statement, so a statement that writes (a
+// `DELETE ... RETURNING *` shows rows too) is refused on every Profile:
+// rerunning it would write a second time, and the rows it wrote are not
+// the rows it would return now. Asking for confirmation instead would put
+// a write prompt behind an export key, so the Console refuses outright.
+func (t *consoleTab) exportRefusal() string {
+	if v := readonly.Violation(t.lastStmt); v != "" {
+		return "export refused: export reruns the statement, which writes (" + v + ")"
+	}
+	return ""
+}
+
+// exportCmd exports the grid's statement to destPath, unless
+// exportRefusal refuses it.
 func (t *consoleTab) exportCmd(pool *connPool, destPath string) tea.Cmd {
+	if r := t.exportRefusal(); r != "" {
+		t.exportStatus = r
+		return nil
+	}
 	format, err := export.InferFormat(destPath)
 	if err != nil {
 		t.exportStatus = "export failed: " + err.Error()
@@ -350,6 +369,11 @@ func (t *consoleTab) Update(msg tea.KeyPressMsg, keys keyMap, pool *connPool) te
 	case key.Matches(msg, keys.EditBuffer):
 		t.editing = true
 	case key.Matches(msg, keys.Export) && t.hasGrid:
+		// Refuse before asking for a path that could not be used.
+		if r := t.exportRefusal(); r != "" {
+			t.exportStatus = r
+			return nil
+		}
 		t.exporting, t.exportInput = true, ""
 	}
 	return nil

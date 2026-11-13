@@ -156,6 +156,63 @@ func TestReadOnlyDataViewLoadNeverReachesTheDatabase(t *testing.T) {
 	}
 }
 
+// Export reruns the Console's last statement, so a statement that writes
+// (`DELETE ... RETURNING *` shows rows) must never be exported: rerunning
+// it would write a second time, unconfirmed.
+func TestConsoleExportNeverRerunsAWrite(t *testing.T) {
+	const want = "export refused: export reruns the statement, which writes (" // + violation + ")"
+	cases := []struct {
+		name    string
+		access  config.Access
+		stmt    string
+		refused bool
+	}{
+		{"a returning delete on a read-write profile", config.ReadWrite, "DELETE FROM widgets RETURNING *", true},
+		{"a returning insert on a read-write profile", config.ReadWrite, "INSERT INTO widgets (name) VALUES ('x') RETURNING id", true},
+		{"a returning update on a read-only profile", config.ReadOnly, "UPDATE widgets SET price = 0 RETURNING *", true},
+		{"a select for update on a read-write profile", config.ReadWrite, "SELECT * FROM widgets FOR UPDATE", true},
+		{"a plain select on a read-write profile", config.ReadWrite, "SELECT * FROM widgets", false},
+		{"a plain select on a read-only profile", config.ReadOnly, "SELECT * FROM widgets", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tb := newConsoleTab("pg-dev", "", nil)
+			tb.setAccess(c.access)
+			tb.hasGrid, tb.lastStmt = true, c.stmt
+			cmd := tb.exportCmd(nil, filepath.Join(t.TempDir(), "x.csv"))
+			if c.refused {
+				// A nil pool panics if the export tries to run.
+				if cmd != nil {
+					t.Fatal("export of a writing statement returned a command")
+				}
+				if !strings.HasPrefix(tb.exportStatus, want) || tb.confirm.pending() {
+					t.Errorf("export status = %q (confirm pending %v), want the refusal", tb.exportStatus, tb.confirm.pending())
+				}
+				return
+			}
+			if cmd == nil || tb.exportStatus != "exporting..." {
+				t.Errorf("export of a read: cmd %v, status %q", cmd != nil, tb.exportStatus)
+			}
+			tb.Cancel()
+		})
+	}
+}
+
+func TestConsoleExportKeyRefusesAWriteBeforeAskingForAPath(t *testing.T) {
+	tb := newConsoleTab("pg-dev", "", nil)
+	tb.setAccess(config.ReadWrite)
+	tb.editing = false
+	tb.hasGrid, tb.lastStmt = true, "DELETE FROM widgets RETURNING *"
+	tb.grid = newGrid([]string{"id"}, [][]any{{1}})
+	tb.Update(tea.KeyPressMsg{Code: 'e', Text: "e"}, defaultKeyMap(), nil)
+	if tb.exporting {
+		t.Fatal("the export path field opened for a writing statement")
+	}
+	if v := ansi.Strip(tb.View(160, 30, true)); !strings.Contains(v, "export refused: export reruns the statement, which writes") {
+		t.Errorf("view must show the export refusal:\n%s", v)
+	}
+}
+
 func TestDataViewTakesItsProfilesAccess(t *testing.T) {
 	cfg := &config.Config{Profiles: map[string]map[string]any{
 		"pg-dev": {"adapter": "postgres", "access": "read-write"},
