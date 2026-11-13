@@ -79,6 +79,7 @@ Refused (masked profile): statement contains a masked value (masked-3f9a1c2b4d5e
 ```
 
 The screen covers `run_query` and `export_query` SQL, the `run_mongo` JSON arguments, and the `run_redis` command and args.
+It ignores letter case, so `MASKED-3F9A1C2B4D5E` and `Masked-Redacted` are refused too: a database with a case-insensitive collation would treat them as the marker.
 A marker is a placeholder, so an agent can neither write it back over real data nor query for it.
 To look up one person, the human runs the query in the terminal UI.
 

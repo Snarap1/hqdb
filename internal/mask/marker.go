@@ -55,15 +55,20 @@ func isWordByte(c byte) bool {
 	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
-func isLowerHex(c byte) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' }
+func isHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
 
 // findMarker returns the first marker in text, or "": "masked-" plus 12
-// lower-case hex characters or "redacted", standing alone between ASCII
-// word boundaries (the \b of regexp).
+// hex characters or "redacted", in any letter case, standing alone
+// between ASCII word boundaries. It is the regular expression
+// (?i)\bmasked-(?:[0-9a-f]{12}|redacted)\b: a database with a
+// case-insensitive collation finds "MASKED-3F9A1C2B4D5E" equal to the
+// marker, so the screen ignores case too, including the Unicode folds of
+// k (U+212A KELVIN SIGN) and s (U+017F LATIN SMALL LETTER LONG S).
 func findMarker(text string) string {
-	const lit = "masked-"
 	for off := 0; ; {
-		i := strings.Index(text[off:], lit)
+		i := strings.IndexAny(text[off:], "mM")
 		if i < 0 {
 			return ""
 		}
@@ -72,7 +77,11 @@ func findMarker(text string) string {
 		if i > 0 && isWordByte(text[i-1]) {
 			continue
 		}
-		end := markerBody(text, i+len(lit))
+		end := foldPrefix(text, i, "masked-")
+		if end < 0 {
+			continue
+		}
+		end = markerBody(text, end)
 		if end < 0 || end < len(text) && isWordByte(text[end]) {
 			continue
 		}
@@ -80,19 +89,37 @@ func findMarker(text string) string {
 	}
 }
 
+// foldPrefix matches the lower-case ASCII lit at text[i:] ignoring case
+// and returns the end of the match, or -1.
+func foldPrefix(text string, i int, lit string) int {
+	for k := 0; k < len(lit); k++ {
+		c := lit[k]
+		switch {
+		case i < len(text) && (text[i] == c || c >= 'a' && c <= 'z' && text[i] == c-'a'+'A'):
+			i++
+		case c == 'k' && strings.HasPrefix(text[i:], "K"):
+			i += len("K")
+		case c == 's' && strings.HasPrefix(text[i:], "ſ"):
+			i += len("ſ")
+		default:
+			return -1
+		}
+	}
+	return i
+}
+
 // markerBody returns the end of the marker body that starts at text[i:],
 // or -1. The two bodies start with different characters (r is not hex),
 // so at most one can fit.
 func markerBody(text string, i int) int {
-	rest := text[i:]
-	if strings.HasPrefix(rest, "redacted") {
-		return i + len("redacted")
+	if end := foldPrefix(text, i, "redacted"); end >= 0 {
+		return end
 	}
-	if len(rest) < 12 {
+	if len(text)-i < 12 {
 		return -1
 	}
-	for k := 0; k < 12; k++ {
-		if !isLowerHex(rest[k]) {
+	for k := i; k < i+12; k++ {
+		if !isHex(text[k]) {
 			return -1
 		}
 	}

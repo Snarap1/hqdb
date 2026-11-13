@@ -165,9 +165,43 @@ func TestIntegerFastPath(t *testing.T) {
 	}
 }
 
-// oldMarker is the marker screen as a regular expression.
-var oldMarker = regexp.MustCompile(`\bmasked-(?:[0-9a-f]{12}|redacted)\b`)
+// oldMarker is the case-sensitive marker screen as a regular expression;
+// foldMarker is the screen as it is now.
+var (
+	oldMarker  = regexp.MustCompile(`\bmasked-(?:[0-9a-f]{12}|redacted)\b`)
+	foldMarker = regexp.MustCompile(`(?i)\bmasked-(?:[0-9a-f]{12}|redacted)\b`)
+)
 
+// randomMarkerText mixes marker pieces in random letter case (with the
+// Unicode folds of k and s) and boundary bytes.
+func randomMarkerText(r *rand.Rand) string {
+	pieces := []string{"masked-", "MASKED-", "Masked-", "maſked-", "masKed-", "redacted", "REDACTED", "Redacted"}
+	var b strings.Builder
+	for n := r.Intn(60); b.Len() < n; {
+		switch r.Intn(5) {
+		case 0, 1:
+			b.WriteString(pieces[r.Intn(len(pieces))])
+		case 2:
+			b.WriteString(randomASCII(r, "0123456789abcdefABCDEF", r.Intn(14)))
+		default:
+			b.WriteString(randomASCII(r, "afAF09gGmMkKsSz_ -.'\"\x80", 1))
+		}
+	}
+	return b.String()
+}
+
+func TestFindMarkerIgnoresCaseLikeRegexp(t *testing.T) {
+	r := rand.New(rand.NewSource(1))
+	for i := 0; i < 20000; i++ {
+		s := randomMarkerText(r)
+		if got, want := findMarker(s), foldMarker.FindString(s); got != want {
+			t.Fatalf("findMarker(%q) = %q, regexp %q", s, got, want)
+		}
+	}
+}
+
+// On lower-case input the screen finds exactly what the case-sensitive
+// one found.
 func TestFindMarkerMatchesRegexp(t *testing.T) {
 	inputs := []string{
 		"", "masked-", "masked-redacted", "xmasked-redacted", "masked-redactedx", "masked-redacted-",
