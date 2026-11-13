@@ -388,8 +388,27 @@ func footerLine(width int, notice, search, export string, editingPageSize bool, 
 // withFooter renders body in exactly height-1 lines and footer below it,
 // so the footer always sits on the content's last line.
 func withFooter(body, footer string, height int) string {
-	h := max(height-1, 0)
-	return lipgloss.NewStyle().Height(h).MaxHeight(h).Render(body) + "\n" + footer
+	return fitLines(body, max(height-1, 0)) + "\n" + footer
+}
+
+// fitLines cuts s to n lines, or pads it with empty lines to n, without
+// re-rendering its lines.
+func fitLines(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	end := 0
+	for i := 1; i < n; i++ {
+		j := strings.IndexByte(s[end:], '\n')
+		if j < 0 {
+			return s + strings.Repeat("\n", n-i)
+		}
+		end += j + 1
+	}
+	if j := strings.IndexByte(s[end:], '\n'); j >= 0 {
+		return s[:end+j]
+	}
+	return s
 }
 
 func (d *dataViewTab) View(width, height int, focused bool) string {

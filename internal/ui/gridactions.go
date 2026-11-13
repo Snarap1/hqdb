@@ -126,25 +126,28 @@ func popupText(v any) string {
 	return cellText(v)
 }
 
-// isMatch reports whether the cell at (r, c) contains the applied search
-// query, case-insensitively.
-func (g grid) isMatch(r, c int) bool {
-	if g.state.query == "" || r >= len(g.rows) || c >= len(g.rows[r]) {
-		return false
-	}
-	return strings.Contains(strings.ToLower(cellText(g.rows[r][c])), strings.ToLower(g.state.query))
-}
-
-// matches lists every matching cell in row-major order.
+// matches lists every cell containing the applied search query,
+// case-insensitively, in row-major order; a cell a short row lacks never
+// matches. The list is memoized on the grid's cells for the query, since
+// the rows never change.
 func (g grid) matches() [][2]int {
-	var out [][2]int
-	for r, row := range g.rows {
-		for c := range row {
-			if c < len(g.columns) && g.isMatch(r, c) {
-				out = append(out, [2]int{r, c})
+	c := g.cells
+	if g.state.query == "" || c == nil {
+		return nil
+	}
+	if c.matchList != nil && c.matchQuery == g.state.query {
+		return c.matchList
+	}
+	q := strings.ToLower(g.state.query)
+	out := [][2]int{}
+	for r, row := range c.rows {
+		for i := range row {
+			if strings.Contains(row[i].lower, q) {
+				out = append(out, [2]int{r, i})
 			}
 		}
 	}
+	c.matchQuery, c.matchList = g.state.query, out
 	return out
 }
 

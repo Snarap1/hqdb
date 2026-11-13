@@ -98,8 +98,8 @@ func TestSearchJumpsCursorBetweenMatchesAndHighlights(t *testing.T) {
 	if g.cursorRow != 1 || g.cursorCol != 1 {
 		t.Fatalf("prev match must wrap, got (%d,%d)", g.cursorRow, g.cursorCol)
 	}
-	if !g.isMatch(1, 1) || g.isMatch(2, 0) {
-		t.Fatal("isMatch must reflect the query")
+	if ms := g.matches(); len(ms) != 2 || ms[0] != [2]int{0, 0} || ms[1] != [2]int{1, 1} {
+		t.Fatalf("matches = %v, want [(0,0) (1,1)]", ms)
 	}
 	if got := g.searchStatus(); got != "search: app (2/2)" {
 		t.Errorf("searchStatus = %q", got)
