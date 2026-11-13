@@ -77,14 +77,20 @@ func Query(ctx context.Context, conn Querier, sqlText, destPath, format string, 
 	if err != nil {
 		return 0, err
 	}
+	var obj *objectEncoder
+	if format == "json" || format == "ndjson" {
+		if obj, err = newObjectEncoder(columns); err != nil {
+			return 0, err
+		}
+	}
 	return writeFile(destPath, func(w *bufio.Writer) (int, error) {
 		switch format {
 		case "csv":
 			return writeCSV(w, rows, columns, limit, transform)
 		case "json":
-			return writeJSONRows(w, rows, columns, limit, transform)
+			return writeJSONRows(w, obj, rows, columns, limit, transform)
 		case "ndjson":
-			return writeNDJSON(w, rows, columns, limit, transform)
+			return writeNDJSON(w, obj, rows, columns, limit, transform)
 		}
 		return 0, fmt.Errorf("format must be one of %s (got %q)", strings.Join(Formats, ", "), format)
 	})
@@ -337,12 +343,12 @@ func writeCSV(w0 *bufio.Writer, rows *sql.Rows, columns []string, limit int, tra
 	return n, w.Error()
 }
 
-// writeJSONRows writes a streamed JSON array of row objects.
-func writeJSONRows(w *bufio.Writer, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
+// writeJSONRows writes a streamed JSON array of row objects, keys in
+// column order.
+func writeJSONRows(w *bufio.Writer, obj *objectEncoder, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
 	if _, err := w.WriteString("["); err != nil {
 		return 0, err
 	}
-	enc := json.NewEncoder(w)
 	first := true
 	n, err := streamRows(rows, columns, limit, transform, func(row []any) error {
 		if !first {
@@ -351,7 +357,7 @@ func writeJSONRows(w *bufio.Writer, rows *sql.Rows, columns []string, limit int,
 			}
 		}
 		first = false
-		return enc.Encode(sqlrows.Object(columns, row))
+		return obj.encode(w, row)
 	})
 	if err != nil {
 		return n, err
@@ -360,11 +366,10 @@ func writeJSONRows(w *bufio.Writer, rows *sql.Rows, columns []string, limit int,
 	return n, err
 }
 
-// writeNDJSON writes one row object per line.
-func writeNDJSON(w *bufio.Writer, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
-	enc := json.NewEncoder(w)
+// writeNDJSON writes one row object per line, keys in column order.
+func writeNDJSON(w *bufio.Writer, obj *objectEncoder, rows *sql.Rows, columns []string, limit int, transform RowTransform) (int, error) {
 	return streamRows(rows, columns, limit, transform, func(row []any) error {
-		return enc.Encode(sqlrows.Object(columns, row))
+		return obj.encode(w, row)
 	})
 }
 

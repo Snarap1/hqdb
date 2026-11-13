@@ -22,27 +22,38 @@ import (
 // enough to cross many write-buffer boundaries. The hashes were taken from
 // the unbuffered writers; changing the output format on purpose means
 // updating them in the same change.
+//
+// With 9 columns (column_0 to column_8) the column order is also the
+// sorted key order the writers once used, so those json and ndjson hashes
+// still pin the original value encoding byte for byte. With 12 columns
+// column_10 and column_11 come last in the result but sorted before
+// column_2, so those hashes pin the column-order keys.
 func TestQueryOutputBytesAreStable(t *testing.T) {
 	cases := []struct {
+		cols   int
 		format string
 		limit  int
 		size   int
 		sha256 string
 	}{
-		{"csv", 0, 346467, "aea3b735da499d03be6be70b043218ac4a68793555eb9d927e4e2b749dc89c05"},
-		{"json", 0, 702888, "f314c3ec827965998b6ba579bcc31cc74a436a67679049275d9435299440658d"},
-		{"ndjson", 0, 699886, "17da33dbd6ffb9c915c3f9d09c24203ab3dff89df670c57e3ad3514b0c78a195"},
-		{"csv", 7, 839, "1ff03c7b6e59933aec90b827c946d842cfa256c380fdfb15cd89bf6be592a221"},
-		{"json", 7, 1599, "fe621410eacc9c01f749b75fc0e18f9c86643033af5febc8867817ac94025e26"},
-		{"ndjson", 7, 1590, "af6f760c500a59f53a8be6cb6e37dd064f69b12e4fa29b95f3141490ca5e9fbd"},
+		{9, "csv", 0, 346467, "aea3b735da499d03be6be70b043218ac4a68793555eb9d927e4e2b749dc89c05"},
+		{9, "json", 0, 702888, "f314c3ec827965998b6ba579bcc31cc74a436a67679049275d9435299440658d"},
+		{9, "ndjson", 0, 699886, "17da33dbd6ffb9c915c3f9d09c24203ab3dff89df670c57e3ad3514b0c78a195"},
+		{9, "csv", 7, 839, "1ff03c7b6e59933aec90b827c946d842cfa256c380fdfb15cd89bf6be592a221"},
+		{9, "json", 7, 1599, "fe621410eacc9c01f749b75fc0e18f9c86643033af5febc8867817ac94025e26"},
+		{9, "ndjson", 7, 1590, "af6f760c500a59f53a8be6cb6e37dd064f69b12e4fa29b95f3141490ca5e9fbd"},
+		{12, "csv", 0, 509102, "5a8052fc2cda8a069d52ff18684a01ce9e48885e615b5c8345f5e6493a65c320"},
+		{12, "json", 0, 981744, "49f4aa77aae009ff685e6795100117450eca3b932b73ec927229374cf3f1122b"},
+		{12, "ndjson", 0, 978742, "1dc7d46dc54ba6280cb0f6d2cfa436a48fe60672f84c88567f272f2fcdc6ff8a"},
 	}
-	db, _ := fakesql.Open(3000, 9)
-	t.Cleanup(func() { db.Close() })
 	dir := t.TempDir()
 	for _, c := range cases {
+		db, _ := fakesql.Open(3000, c.cols)
 		dest := filepath.Join(dir, "out."+c.format)
-		if _, err := Query(context.Background(), db, "SELECT", dest, c.format, c.limit, nil); err != nil {
-			t.Fatalf("%s limit %d: %v", c.format, c.limit, err)
+		_, err := Query(context.Background(), db, "SELECT", dest, c.format, c.limit, nil)
+		db.Close()
+		if err != nil {
+			t.Fatalf("%d cols %s limit %d: %v", c.cols, c.format, c.limit, err)
 		}
 		data, err := os.ReadFile(dest)
 		if err != nil {
@@ -50,8 +61,8 @@ func TestQueryOutputBytesAreStable(t *testing.T) {
 		}
 		sum := sha256.Sum256(data)
 		if got := hex.EncodeToString(sum[:]); got != c.sha256 || len(data) != c.size {
-			t.Errorf("%s limit %d: %d bytes sha256 %s, want %d bytes sha256 %s",
-				c.format, c.limit, len(data), got, c.size, c.sha256)
+			t.Errorf("%d cols %s limit %d: %d bytes sha256 %s, want %d bytes sha256 %s",
+				c.cols, c.format, c.limit, len(data), got, c.size, c.sha256)
 		}
 	}
 }

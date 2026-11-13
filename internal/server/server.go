@@ -449,7 +449,8 @@ func registerTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "export_query",
 		Description: "Run one SQL statement (screened like run_query; a postgres profile may expose several databases, pick one with database) and stream the results into a csv, json, or " +
-			"ndjson file. The format is inferred from the file extension when not given. The " +
+			"ndjson file. The format is inferred from the file extension when not given. json and ndjson rows are " +
+			"objects keyed in column order, so every column needs a unique name (alias duplicates such as a.id, b.id). The " +
 			"destination's parent directory must exist; it is not created." + maskNote,
 	}, exportQueryTool)
 }

@@ -36,13 +36,24 @@ type Stats struct {
 // Open returns a pool whose every query yields rows rows of cols columns,
 // and the Stats it updates.
 func Open(rows, cols int) (*sql.DB, *Stats) {
+	names := make([]string, cols)
+	for i := range names {
+		names[i] = fmt.Sprintf("column_%d", i)
+	}
+	return OpenColumns(rows, names...)
+}
+
+// OpenColumns is Open with the result's column names given, repeats
+// allowed; column i holds the values Value(row, i).
+func OpenColumns(rows int, names ...string) (*sql.DB, *Stats) {
 	st := &Stats{}
-	return sql.OpenDB(&connector{rows: rows, cols: cols, stats: st}), st
+	return sql.OpenDB(&connector{rows: rows, names: names, stats: st}), st
 }
 
 type connector struct {
-	rows, cols int
-	stats      *Stats
+	rows  int
+	names []string
+	stats *Stats
 }
 
 func (c *connector) Connect(context.Context) (driver.Conn, error) {
@@ -72,7 +83,7 @@ func (c *conn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return newRows(ctx, c, c.c.rows, c.c.cols), nil
+	return &rows{ctx: ctx, c: c, n: c.c.rows, names: c.c.names}, nil
 }
 
 func (c *conn) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
@@ -153,19 +164,10 @@ func Value(i, col int) driver.Value {
 }
 
 type rows struct {
-	ctx     context.Context
-	c       *conn
-	n, cols int
-	i       int
-	names   []string
-}
-
-func newRows(ctx context.Context, c *conn, n, cols int) *rows {
-	r := &rows{ctx: ctx, c: c, n: n, cols: cols}
-	for i := 0; i < cols; i++ {
-		r.names = append(r.names, fmt.Sprintf("column_%d", i))
-	}
-	return r
+	ctx   context.Context
+	c     *conn
+	n, i  int
+	names []string
 }
 
 func (r *rows) Columns() []string { return r.names }
@@ -198,7 +200,7 @@ func (r *rows) Close() error {
 		r.i = r.n
 		return err
 	}
-	dest := make([]driver.Value, r.cols)
+	dest := make([]driver.Value, len(r.names))
 	for ; r.i < r.n; r.i++ {
 		for c := range dest {
 			dest[c] = Value(r.i, c)

@@ -69,9 +69,9 @@ func TestQueryAppliesTransformToEveryFormat(t *testing.T) {
 	}{
 		{"csv", "name,n\nada,1\nbob,2\n", nil},
 		{"csv", "name,n\nX-ada,1\nX-bob,2\n", upper},
-		{"json", "[{\"n\":1,\"name\":\"X-ada\"}\n,{\"n\":2,\"name\":\"X-bob\"}\n]\n", upper},
-		{"ndjson", "{\"n\":1,\"name\":\"X-ada\"}\n{\"n\":2,\"name\":\"X-bob\"}\n", upper},
-		{"ndjson", "{\"n\":1,\"name\":\"ada\"}\n{\"n\":2,\"name\":\"bob\"}\n", nil},
+		{"json", "[{\"name\":\"X-ada\",\"n\":1}\n,{\"name\":\"X-bob\",\"n\":2}\n]\n", upper},
+		{"ndjson", "{\"name\":\"X-ada\",\"n\":1}\n{\"name\":\"X-bob\",\"n\":2}\n", upper},
+		{"ndjson", "{\"name\":\"ada\",\"n\":1}\n{\"name\":\"bob\",\"n\":2}\n", nil},
 	}
 	db := openRowsDB(t)
 	for _, c := range cases {

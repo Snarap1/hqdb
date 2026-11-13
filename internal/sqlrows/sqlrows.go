@@ -57,14 +57,3 @@ func Stream(rows *sql.Rows, columns []string, limit int, emit func([]any) error)
 	}
 	return n, rows.Err()
 }
-
-// Object maps a positional row onto its column names.
-func Object(columns []string, row []any) map[string]any {
-	obj := make(map[string]any, len(row))
-	for i, v := range row {
-		if i < len(columns) {
-			obj[columns[i]] = v
-		}
-	}
-	return obj
-}

@@ -370,6 +370,8 @@ A database the profile does not expose (not discovered) is refused with `databas
 
 The SQL is sent to the database unmodified; no `LIMIT` is injected, so bound the response with the `limit` argument.
 `run_query` defaults to 50 rows, `export_query` to unlimited when `limit` is 0.
+A `json` or `ndjson` export writes each row as an object whose keys follow the result's column order.
+Since an object holds each key once, a result with a repeated column name (`SELECT a.id, b.id ...`) is refused before any row is written, with `duplicate column name "<name>" in result; give each column a unique alias`; `csv` keeps repeated header names.
 
 `run_redis` is default-deny: the leading word of `command` must be on the allowlist, or the call is refused with `command "<cmd>" is not allowed; this profile permits read commands only`.
 An empty command is refused with `empty command`.
