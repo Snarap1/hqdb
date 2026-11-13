@@ -70,13 +70,15 @@ func orderedRegions(s string) []struct{ region, trunk string } {
 }
 
 func phoneDetector() detector {
+	match := func(s string) bool {
+		_, ok := phoneE164(s)
+		return ok
+	}
 	return detector{
-		kind: Phone,
-		match: func(s string) bool {
-			_, ok := phoneE164(s)
-			return ok
-		},
-		find: phoneFind,
+		kind:     Phone,
+		match:    match,
+		rawMatch: match,
+		finders:  candidateFinder(phoneCand, phoneFind),
 	}
 }
 

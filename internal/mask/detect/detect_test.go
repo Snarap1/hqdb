@@ -11,7 +11,7 @@ import (
 // complete appends the one check digit that makes prefix+digit a value of
 // kind want (the validators are checked against official examples in
 // validCases; this only builds more samples of the same shape).
-func complete(t *testing.T, want Kind, prefix string) string {
+func complete(t testing.TB, want Kind, prefix string) string {
 	t.Helper()
 	for d := '0'; d <= '9'; d++ {
 		v := prefix + string(d)
@@ -32,7 +32,7 @@ type valueCase struct {
 }
 
 // validCases are official examples or well-known published samples.
-func validCases(t *testing.T) []valueCase {
+func validCases(t testing.TB) []valueCase {
 	return []valueCase{
 		{Email, "ivan.petrov+tag@example.co.uk"},
 		{Email, "Иван@пример.рф"},

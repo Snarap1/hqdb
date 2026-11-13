@@ -157,9 +157,10 @@ var ipv6Cand = regexp.MustCompile(`[0-9A-Fa-f.]*(?::[0-9A-Fa-f.]*){2,}`)
 
 func ipv6Detector() detector {
 	return detector{
-		kind:  IPv6,
-		match: validIPv6,
-		find: func(text string) [][2]int {
+		kind:     IPv6,
+		match:    validIPv6,
+		rawMatch: validIPv6,
+		finders: candidateFinder(ipv6Cand, func(text string) [][2]int {
 			var out [][2]int
 			for _, loc := range ipv6Cand.FindAllStringIndex(text, -1) {
 				s, e := loc[0], loc[1]
@@ -172,7 +173,7 @@ func ipv6Detector() detector {
 				}
 			}
 			return out
-		},
+		}),
 	}
 }
 

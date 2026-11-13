@@ -57,42 +57,62 @@ type Span struct {
 }
 
 // detector recognizes one kind.
-// match judges a whole trimmed value; find proposes candidate byte ranges
-// in a text, which Find then checks for word boundaries and with match.
+// match judges a whole trimmed value; each finder proposes candidate byte
+// ranges in a text, which Find then checks for word boundaries and with
+// match. rawMatch is match without prefilters; the tests compare the two.
 type detector struct {
-	kind  Kind
-	match func(s string) bool
-	find  func(text string) [][2]int
+	kind     Kind
+	match    func(s string) bool
+	rawMatch func(s string) bool
+	finders  []finder
 }
 
 // shaped builds a detector from regular-expression shapes (the textual
 // forms the kind may take) and a validator (checksum or structure).
+// Each shape gets the prefilter derived from it, for Match and for Find.
 func shaped(kind Kind, valid func(string) bool, shapes ...string) detector {
-	var finds, fulls []*regexp.Regexp
-	for _, sh := range shapes {
-		finds = append(finds, regexp.MustCompile(sh))
-		fulls = append(fulls, regexp.MustCompile(`^(?:`+sh+`)$`))
+	type full struct {
+		re *regexp.Regexp
+		pf prefilter
 	}
-	return detector{
-		kind: kind,
-		match: func(s string) bool {
-			for _, re := range fulls {
-				if re.MatchString(s) {
-					return valid(s)
-				}
-			}
-			return false
-		},
-		find: func(text string) [][2]int {
+	var fulls []full
+	var finders []finder
+	for _, sh := range shapes {
+		re, pf := regexp.MustCompile(sh), derivePrefilter(sh)
+		fulls = append(fulls, full{regexp.MustCompile(`^(?:` + sh + `)$`), pf})
+		finders = append(finders, finder{pf: pf, find: func(text string) [][2]int {
 			var out [][2]int
-			for _, re := range finds {
-				for _, loc := range re.FindAllStringIndex(text, -1) {
-					out = append(out, [2]int{loc[0], loc[1]})
-				}
+			for _, loc := range re.FindAllStringIndex(text, -1) {
+				out = append(out, [2]int{loc[0], loc[1]})
 			}
 			return out
-		},
+		}})
 	}
+	// The first shape that matches decides, as without prefilters: a shape
+	// the prefilter rejects cannot match, so skipping it changes nothing.
+	match := func(s string, filtered bool) bool {
+		for i := range fulls {
+			if filtered && !fulls[i].pf.admits(s) {
+				continue
+			}
+			if fulls[i].re.MatchString(s) {
+				return valid(s)
+			}
+		}
+		return false
+	}
+	return detector{
+		kind:     kind,
+		match:    func(s string) bool { return match(s, true) },
+		rawMatch: func(s string) bool { return match(s, false) },
+		finders:  finders,
+	}
+}
+
+// candidateFinder is the finder of a detector whose find proposes ranges
+// only inside the matches of cand.
+func candidateFinder(cand *regexp.Regexp, find func(text string) [][2]int) []finder {
+	return []finder{{pf: derivePrefilter(cand.String()), find: find}}
 }
 
 // detectors is the fixed priority order: when several kinds match the
@@ -154,19 +174,94 @@ type candidate struct {
 	prio int
 }
 
+// finderRef is one finder of the detector at priority prio.
+type finderRef struct {
+	prio int
+	f    *finder
+}
+
+// finderGroup is the finders that share one prefilter alphabet, so the
+// runs of that alphabet are computed once per text for all of them.
+type finderGroup struct {
+	alpha   *byteSet // nil: the finders run on the whole text
+	members []finderRef
+}
+
+var finderGroups = groupFinders(detectors)
+
+func groupFinders(ds []detector) []finderGroup {
+	var groups []finderGroup
+	index := map[byteSet]int{}
+	for prio := range ds {
+		for i := range ds[prio].finders {
+			f := &ds[prio].finders[i]
+			ref := finderRef{prio, f}
+			if f.pf.alpha == nil {
+				groups = append(groups, finderGroup{nil, []finderRef{ref}})
+				continue
+			}
+			g, ok := index[*f.pf.alpha]
+			if !ok {
+				g = len(groups)
+				index[*f.pf.alpha] = g
+				groups = append(groups, finderGroup{alpha: f.pf.alpha})
+			}
+			groups[g].members = append(groups[g].members, ref)
+		}
+	}
+	return groups
+}
+
 // Find returns every detected value inside text, sorted by Start,
 // non-overlapping, and bounded by non-word characters.
 func Find(text string) []Span {
 	var cands []candidate
-	for prio, d := range detectors {
-		for _, loc := range d.find(text) {
-			s, e := loc[0], loc[1]
-			if e <= s || !bounded(text, s, e) || !d.match(text[s:e]) {
+	add := func(prio int, loc [2]int) {
+		d := &detectors[prio]
+		s, e := loc[0], loc[1]
+		if e <= s || !bounded(text, s, e) || !d.match(text[s:e]) {
+			return
+		}
+		cands = append(cands, candidate{Span{s, e, d.kind}, prio})
+	}
+	for _, g := range finderGroups {
+		if g.alpha == nil {
+			for _, m := range g.members {
+				for _, loc := range m.f.find(text) {
+					add(m.prio, loc)
+				}
+			}
+			continue
+		}
+		for i := 0; i < len(text); {
+			if !g.alpha[text[i]] {
+				i++
 				continue
 			}
-			cands = append(cands, candidate{Span{s, e, d.kind}, prio})
+			j := i + 1
+			for j < len(text) && g.alpha[text[j]] {
+				j++
+			}
+			run := text[i:j]
+			for _, m := range g.members {
+				if !m.f.pf.runAdmits(run) {
+					continue
+				}
+				for _, loc := range m.f.find(run) {
+					add(m.prio, [2]int{loc[0] + i, loc[1] + i})
+				}
+			}
+			i = j
 		}
 	}
+	return resolve(cands)
+}
+
+// resolve orders the candidates and keeps the non-overlapping ones: longer
+// first, then by detector priority, then by position. Two candidates equal
+// in all three are the same span, so the order the finders proposed them
+// in does not matter.
+func resolve(cands []candidate) []Span {
 	sort.SliceStable(cands, func(i, j int) bool {
 		li, lj := cands[i].End-cands[i].Start, cands[j].End-cands[j].Start
 		if li != lj {
