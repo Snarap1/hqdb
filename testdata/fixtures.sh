@@ -23,6 +23,18 @@ CH_NATIVE_PORT=59000
 REDIS_PORT=56379
 MONGO_PORT=57017
 
+TESTDATA_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# Per-container memory caps, so a busy host OOM-kills a fixture
+# rather than an unrelated process. MSSQL refuses to start below 2 GB.
+PG_MEM=256m
+MY_MEM=512m
+MS_MEM=2g
+CH_MEM=768m
+CH_CPUS=1
+REDIS_MEM=128m
+MONGO_MEM=512m
+
 log() { printf '%s fixtures: %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 
 wait_for() {
@@ -48,37 +60,38 @@ up() {
   remove_all
 
   log "starting postgres on 127.0.0.1:$PG_PORT"
-  docker run -d --name "$PG_NAME" \
+  docker run -d --name "$PG_NAME" --memory "$PG_MEM" \
     -e POSTGRES_USER=hq -e POSTGRES_PASSWORD=hq -e POSTGRES_DB=hqdb \
     -p "127.0.0.1:$PG_PORT:5432" postgres:16-alpine >/dev/null
   wait_for "$PG_NAME" 60 docker exec "$PG_NAME" pg_isready -U hq -d hqdb
 
   log "starting mysql on 127.0.0.1:$MY_PORT"
-  docker run -d --name "$MY_NAME" \
+  docker run -d --name "$MY_NAME" --memory "$MY_MEM" \
     -e MYSQL_ROOT_PASSWORD=rootpw -e MYSQL_USER=hq -e MYSQL_PASSWORD=hq -e MYSQL_DATABASE=hqdb \
     -p "127.0.0.1:$MY_PORT:3306" mysql:8 >/dev/null
   wait_for "$MY_NAME" 120 docker exec "$MY_NAME" mysqladmin ping -uroot -prootpw
 
   log "starting mssql on 127.0.0.1:$MS_PORT"
-  docker run -d --name "$MS_NAME" \
+  docker run -d --name "$MS_NAME" --memory "$MS_MEM" \
     -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='Hq!Passw0rd' \
     -p "127.0.0.1:$MS_PORT:1433" mcr.microsoft.com/mssql/server:2022-latest >/dev/null
   wait_for "$MS_NAME" 120 docker exec "$MS_NAME" /opt/mssql-tools18/bin/sqlcmd \
     -S localhost -U sa -P 'Hq!Passw0rd' -C -Q 'SELECT 1'
 
   log "starting clickhouse on 127.0.0.1:$CH_HTTP_PORT (http) and $CH_NATIVE_PORT (native)"
-  docker run -d --name "$CH_NAME" \
+  docker run -d --name "$CH_NAME" --memory "$CH_MEM" --cpus "$CH_CPUS" \
+    -v "$TESTDATA_DIR/clickhouse-quiet.xml:/etc/clickhouse-server/config.d/zz-quiet.xml:ro" \
     -e CLICKHOUSE_USER=hq -e CLICKHOUSE_PASSWORD=hq -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
     -p "127.0.0.1:$CH_HTTP_PORT:8123" -p "127.0.0.1:$CH_NATIVE_PORT:9000" \
     clickhouse/clickhouse-server:24-alpine >/dev/null
   wait_for "$CH_NAME" 90 docker exec "$CH_NAME" clickhouse-client --user hq --password hq -q 'SELECT 1'
 
   log "starting redis on 127.0.0.1:$REDIS_PORT"
-  docker run -d --name "$REDIS_NAME" -p "127.0.0.1:$REDIS_PORT:6379" redis:7-alpine >/dev/null
+  docker run -d --name "$REDIS_NAME" --memory "$REDIS_MEM" -p "127.0.0.1:$REDIS_PORT:6379" redis:7-alpine >/dev/null
   wait_for "$REDIS_NAME" 30 docker exec "$REDIS_NAME" redis-cli ping
 
   log "starting mongodb on 127.0.0.1:$MONGO_PORT"
-  docker run -d --name "$MONGO_NAME" \
+  docker run -d --name "$MONGO_NAME" --memory "$MONGO_MEM" \
     -e MONGO_INITDB_ROOT_USERNAME=hq -e MONGO_INITDB_ROOT_PASSWORD=hq \
     -p "127.0.0.1:$MONGO_PORT:27017" mongo:7 >/dev/null
   wait_for "$MONGO_NAME" 60 docker exec "$MONGO_NAME" mongosh --quiet -u hq -p hq --eval 'db.runCommand({ping: 1})'
