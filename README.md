@@ -82,6 +82,10 @@ prod-pg   postgres  read-only   ok
 
 `hqdb check --no-probe` validates the file without connecting; `hqdb check prod-pg` checks one Profile.
 It exits non-zero on any failure, so it drops into CI too.
+A Profile with a password written in the file reports `ok  literal credentials; run hqdb setup`.
+
+`hqdb setup` moves those into a secret store through the store's own CLI - the Secret Service (`secret-tool`) on Linux, the Keychain (`security`) on macOS, plus `pass` and an env file on those two - and rewrites the config line to the reference that reads the value back (`${cmd:...}` or `${env:...}`), keeping every other line of the file as it is ([ADR-0009](docs/adr/0009-hqdb-setup.md)).
+On Windows the wizard writes nothing and says there is no store: no Windows CLI returns a stored password, and reading the Credential Manager directly is what an antivirus treats as an infostealer, so a Windows secret is referenced by hand through `${cmd:...}` or `${env:...}`.
 
 ## Access modes
 
@@ -236,7 +240,7 @@ Only `default_profile`, `profiles`, and `masking` are accepted at the top level.
 
 Every adapter also takes `access` (`read-only` or `read-write`) and `mask` (`true` or `false`, MCP only).
 An unknown key is rejected with the list of valid options for that adapter.
-[`docs/config-guide.md`](docs/config-guide.md) is the full guide: choosing a file, `conn_str` URL and ODBC-list forms, ClickHouse HTTP vs native, client registration, and troubleshooting.
+[`docs/config-guide.md`](docs/config-guide.md) is the full guide: choosing a file, `conn_str` URL and ODBC-list forms, secret references (`${env:...}`, `${cmd:...}`) so a password never has to live in the file, ClickHouse HTTP vs native, client registration, and troubleshooting.
 It is self-contained, so you can also hand an agent the link and let it write the config.
 
 ## Build and test

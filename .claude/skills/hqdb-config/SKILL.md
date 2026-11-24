@@ -14,6 +14,9 @@ Read it before writing anything; this file only carries the workflow.
 ## Workflow
 
 1. Gather the connection facts: adapter, host, port, user, password, database, TLS or encryption requirement, and for redis the key separator convention.
+   Ask where the password should live: in the file, in an environment variable, or in a secret manager (`pass`, 1Password, vault, the OS keychain).
+   A password written in the file keeps working, but a committed or shared config should reference it instead (`${env:NAME}`, `${cmd:command}`); see Credentials in section 1 of the guide.
+   When the config already carries literals, `hqdb setup` moves them into a store automatically (the platform keyring through its own CLI, `pass`, or an env file) - offer it before writing placeholders by hand.
 2. Ask who the config is for and set `access` per profile: omit it (read-only) unless the user wants writes on that profile, then `access = "read-write"`.
    Never make a production profile read-write unless the user says so explicitly.
 3. Pick the file. `~/.config/hqdb/config.toml` for personal machine-wide profiles, a project-local `hqdb.toml` for repo-scoped ones.
@@ -39,8 +42,9 @@ It prints one line per profile (adapter, access, `ok` or `FAIL` with the error) 
 3. Every key inside a profile must be valid for that adapter; `access` is valid for all of them and takes only `read-only` or `read-write`, and `mask` is valid for all of them and takes a boolean.
 4. Merge is top-level key replacement, not deep merge.
 5. `pyproject.toml` contributes only its `[tool.hqdb]` section.
-6. Passwords live in the file in plain text.
-   Never echo them into a committed config, a log, a chat message, or a committed example; use placeholders.
+6. Passwords may live in the file in plain text, or behind a `${env:NAME}` or `${cmd:command}` reference that hqdb expands where a connection is opened.
+   Never echo a resolved password into a committed config, a log, or a chat message.
+   `hqdb check` verifies references without running commands: every `${env:NAME}` must be set on the machine the check runs on, and `--probe` executes `${cmd:...}` for real.
 
 ## Masking
 

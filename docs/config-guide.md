@@ -42,9 +42,68 @@ Keep each file self-contained, or point `HQDB_CONFIG` at one file and rely on it
 
 ### Credentials
 
-Passwords live in the file in plain text.
+A password may live in the file in plain text (`password = "..."`, or inside a `conn_str`).
 Keep a real-credential config out of version control.
 A committed example should carry placeholders only.
+
+Instead of the secret itself, any string option may carry a reference to where the secret lives ([ADR-0008](adr/0008-secret-references.md)):
+
+- `${env:NAME}` is the environment variable `NAME`; unset is an error, so a typo fails loudly.
+- `${cmd:command}` is the standard output of `command`, run through the shell, trailing newlines trimmed.
+
+```toml
+[profiles.prod]
+adapter = "postgres"
+host = "db.internal"
+user = "app"
+password = "${cmd:pass show db/prod}"          # pass, gopass
+# password = "${cmd:op read op://team/prod/db/password}"   # 1Password
+# password = "${cmd:vault kv get -field=password secret/prod/db}"   # HashiCorp Vault
+# password = "${cmd:security find-generic-password -s hqdb-prod -w}"   # macOS Keychain
+# password = "${cmd:secret-tool lookup service hqdb profile prod}"   # Linux Secret Service
+# password = "${env:PROD_DB_PASSWORD}"   # environment, e.g. the MCP client's env map
+```
+
+The forms expand inside a longer value too, so they work in both `conn_str` forms (section 4).
+Anything that matches neither form is literal text, so a literal password keeps working.
+References are expanded only where a connection is opened; the rest of the program sees the file as written.
+A command's output is reused for five minutes, so a `pass` call does not run on every call for adapters whose connections reopen after statements (mysql, clickhouse native, redis).
+`hqdb check` verifies the references without running any command: every `${env:NAME}` must be set on the machine the check runs on, and `--probe` executes `${cmd:...}` for real.
+
+For the MCP server, `${env:...}` pairs with the client's `env` map (section 6): the secret moves from the config file into the registration, and the file itself is safe to commit.
+For the terminal UI, export the variable in the shell profile (on Windows `setx PROD_DB_PASSWORD ...`), or prefer `${cmd:...}` with a secret manager - set up once, then never touched again.
+
+### Moving credentials into a store (`hqdb setup`)
+
+`hqdb setup` does the move automatically ([ADR-0009](adr/0009-hqdb-setup.md)).
+It lists every literal credential - the `password` key, a password inside a `conn_str` URL, a `Pwd=` value in an ODBC conn_str - and moves the chosen ones into a store, writing the store through its own CLI:
+
+- Linux: the Secret Service through `secret-tool` (the secret goes over stdin).
+- macOS: the Keychain through the built-in `security`.
+- Linux and macOS only: `pass` (the secret over stdin) and an env file (`$XDG_CONFIG_HOME/hqdb/env.sh`, mode 0600) whose lines you wire into your shell profile or the MCP client's `env` map.
+
+On Windows `hqdb setup` says that no store is available, and no reference is written.
+No Windows CLI returns a stored password (`cmdkey` writes and lists, nothing reads), so the missing piece would be hqdb reading the Credential Manager itself - and a binary that pulls a stored password out and prints it is exactly what an antivirus, a store reviewer, and an endpoint agent treat as an infostealer ([ADR-0009](adr/0009-hqdb-setup.md)).
+The env file is left out there for a smaller reason: it exists so a shell can source it, and the POSIX file hqdb writes is not something Windows sources, so moving the secret there would only bury it in a second plaintext file the config no longer points at.
+`pass` is left out too: it is a bash script, and on Windows hqdb runs `${cmd:...}` through `cmd /C`, which executes only a native program or a `.bat`/`.cmd`.
+So a Windows secret is referenced by hand, with a manager whose CLI is a real `.exe`:
+
+```toml
+password = "${cmd:op read op://team/prod/db/password}"        # 1Password CLI
+password = "${cmd:gopass show -o hqdb/prod}"                   # gopass: pass-compatible, native exe
+password = "${cmd:vault kv get -field=password secret/prod/db}"   # HashiCorp Vault
+# password = "${cmd:keepassxc-cli show -s -a Password C:\\secrets\\main.kdbx \"prod/db\"}"   # KeePassXC
+```
+
+`${env:PROD_DB_PASSWORD}` works as well, set with `setx` or in the MCP client's `env` map; it keeps the secret out of the config file, but not out of the reach of a process running as the same user.
+A `${cmd:...}` runs when a connection is opened, and a command that waits on a prompt - an unlocked manager, a master password asked on the terminal - fails after 30 seconds instead of hanging the call.
+
+The store is proven first: hqdb reads the value back and only then patches the config line, so the config is never left pointing at a store that did not take the value.
+The config file keeps everything else - comments, ordering, every other value - because only the one line carrying the credential is rewritten, and the result is verified before the file is replaced.
+
+Two caveats the wizard cannot remove.
+`security add-generic-password -w` takes the password on its command line, where other processes of the same user can see it while the command runs; the stores that take the secret over stdin (`secret-tool`, `pass`, the env file) do not.
+And an OS keyring needs its session unlocked: over SSH without a desktop, `secret-tool` fails and the probe says so, in which case `pass` or the env file is the better store.
 
 ## 2. The file shape
 
@@ -217,6 +276,7 @@ conn_str = "mongodb+srv://app:secret@cluster0.example.mongodb.net/appdb?retryWri
 For `postgres`, `mysql`, `mssql`, and `clickhouse`, `conn_str` may be a URL whose scheme is `postgres://`, `mysql://`, `sqlserver://`, `http://`, `https://`, or `clickhouse://`.
 The path sets the database (`database` for clickhouse, `dbname` otherwise); the authority sets `host`, `port`, `user`, `password`.
 URL parts only fill keys absent from the profile: explicit keys always win.
+Secret references (section 1, Credentials) expand inside the URL, so `postgres://app:${env:PROD_PASSWORD}@host/db` connects with the variable's value.
 
 ```toml
 [profiles.url-pg]
@@ -231,10 +291,11 @@ An `odbc` profile takes `conn_str` and nothing else; without it the server retur
 
 The ODBC driver is never loaded: the server parses the string itself and connects over TDS with go-mssqldb.
 Recognized keys, case-insensitive: `Driver` (read but unused), `Server` / `Data Source` / `Addr` / `Address` / `Network Address` (`host[,port]`), `Database` / `Initial Catalog`, `Uid` / `User` / `UserName`, `Pwd` / `Password`, `Encrypt`.
-A missing port becomes `1433`; a missing `Server` is the error `ODBC conn_str has no Server: <conn_str>`.
+A missing port becomes `1433`; a missing `Server` is the error `ODBC conn_str has no Server: <conn_str>`, with any `Pwd=`/`Password=` value redacted.
 `Encrypt` maps as: `no`, `false`, `0`, `optional` to `disable`; `strict` to `strict`; anything else, including `yes` and `true`, to `true`.
 
 `conn_str` may be a string or a list of strings, joined with a single space.
+Secret references (section 1, Credentials) expand in each element before the join, so `"Pwd=${env:PROD_PASSWORD};"` works.
 Real profiles use the list form, and each element ends with `;`:
 
 ```toml
@@ -455,6 +516,9 @@ Masking is defense in depth, not a security boundary: keep a database login with
 | a masked value is wrong, missing, or refused | see the troubleshooting table in [`masking.md`](masking.md#troubleshooting) |
 | `unknown option "<key>" for adapter "<a>"; valid options: ...` | typo, or a key from another adapter |
 | `adapter "odbc" requires conn_str` | an `odbc` profile with no `conn_str` |
+| `secret reference ${env:...}: environment variable "..." is not set` | the variable is not set on the machine hqdb runs on; export it, or run `hqdb check` where the server will run |
+| `secret reference ${cmd:...}: command failed: ...` | the secret manager command failed; the first stderr line says why (locked keyring, wrong entry, expired session) |
+| `secret reference ${cmd:...}: command timed out after 30s` | the command waits on a prompt; unlock the keyring or the agent session |
 | `config file could not be found at specified path: <path>` | `HQDB_CONFIG` points at a file that does not exist |
 | a profile from `~/.config` is missing | a higher-priority `profiles` table replaced the whole map |
 | `list_profiles` is empty | the client launched the server from an unexpected working directory, or no candidate file has profiles |

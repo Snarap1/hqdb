@@ -41,6 +41,7 @@ Rules that look like bugs and are not:
 - A bare `name` column is not masked: it is deliberately not a built-in rule; users add it to `[masking] columns`.
 - A phone stored as a bare integer is caught by column name only: the phone detector needs a `+`, `00`, or a national trunk prefix.
 - Profiles are raw `map[string]any` tables read through `config.Opt*` accessors; per-adapter key validation rejects unknown keys with the valid-key list.
+- `hqdb setup` offers no store on Windows - not the Credential Manager, not the env file, not `pass`: a binary that prints a stored password is what an antivirus treats as an infostealer, Windows sources no POSIX env file, and `pass` is a bash script where `${cmd:...}` goes through `cmd /C` (ADR-0009).
 
 ## Development Commands
 

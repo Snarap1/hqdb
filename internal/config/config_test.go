@@ -401,3 +401,36 @@ func TestLoadMaskingReplacesWhole(t *testing.T) {
 		t.Errorf("Masking = %#v, want %#v (top-level replacement)", cfg.Masking, want)
 	}
 }
+
+func TestRedactConnStr(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"postgres://app:secret@127.0.0.1:5432/appdb", "postgres://***@127.0.0.1:5432/appdb"},
+		{"postgres://app@127.0.0.1:5432/appdb", "postgres://***@127.0.0.1:5432/appdb"},
+		{"Server=127.0.0.1,1433;Uid=sa;Pwd=secret;", "Server=127.0.0.1,1433;Uid=sa;Pwd=***;"},
+		{"Server=127.0.0.1;Password={s e c r e t};", "Server=127.0.0.1;Password=***;"},
+		{"Driver={ODBC Driver 18 for SQL Server};Server=127.0.0.1,1433;", "Driver={ODBC Driver 18 for SQL Server};Server=127.0.0.1,1433;"},
+		{"no credentials here", "no credentials here"},
+	}
+	for _, c := range cases {
+		if got := RedactConnStr(c.in); got != c.want {
+			t.Errorf("RedactConnStr(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestFillFromURLParseErrorDoesNotLeakPassword(t *testing.T) {
+	// A parse failure names the conn_str redacted, and drops url.Parse's
+	// own error, which embeds the URL verbatim.
+	p := map[string]any{"conn_str": "postgres://app:secret@127.0.0.1:notaport/appdb"}
+	_, err := FillFromURL(p, "postgres")
+	if err == nil {
+		t.Fatal("expected a parse error")
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("error leaks the password: %v", err)
+	}
+	want := `could not parse conn_str "postgres://***@127.0.0.1:notaport/appdb" as a URL`
+	if err.Error() != want {
+		t.Errorf("got %q, want %q", err, want)
+	}
+}

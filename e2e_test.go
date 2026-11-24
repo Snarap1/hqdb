@@ -45,7 +45,25 @@ func startE2E(t *testing.T) *e2eSession {
 	}
 	// pg-rw and mongo-rw are pg-dev and mongo-dev with read-write access:
 	// the same databases, unscreened.
+	// pg-env and pg-cmd are pg-dev with the password behind a secret
+	// reference (ADR-0008): the same database, resolved at open time.
 	cfg = append(cfg, []byte(`
+[profiles.pg-env]
+adapter = "postgres"
+host = "127.0.0.1"
+port = 55432
+user = "hq"
+password = "${env:HQDB_E2E_PASSWORD}"
+dbname = "hqdb"
+
+[profiles.pg-cmd]
+adapter = "postgres"
+host = "127.0.0.1"
+port = 55432
+user = "hq"
+password = "${cmd:echo hq}"
+dbname = "hqdb"
+
 [profiles.pg-rw]
 adapter = "postgres"
 access = "read-write"
@@ -130,7 +148,7 @@ port = 56379
 	}
 	cmd := exec.Command(bin, "mcp")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HQDB_CONFIG="+cfgPath)
+	cmd.Env = append(os.Environ(), "HQDB_CONFIG="+cfgPath, "HQDB_E2E_PASSWORD=hq")
 	client := mcp.NewClient(&mcp.Implementation{Name: "hqdb-e2e", Version: "0.0.1"}, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
@@ -836,5 +854,17 @@ func TestE2EGetDDLUnsupportedAdapters(t *testing.T) {
 	}
 	if msg := s.errText("get_ddl", map[string]any{"profile": "mongo-dev", "path": []string{"hqdb", "widgets"}}); !strings.Contains(msg, "get_ddl is not available for mongodb; use run_mongo") {
 		t.Errorf("mongodb message = %q", msg)
+	}
+}
+
+// TestE2ESecretReferences connects through both reference forms, so the
+// expansion is proven end to end: a password from an environment variable
+// (the form an MCP client's env map fills) and one from a command (the
+// form a secret manager fills).
+func TestE2ESecretReferences(t *testing.T) {
+	s := startE2E(t)
+	for _, profile := range []string{"pg-env", "pg-cmd"} {
+		var out server.RunQueryOut
+		s.ok("run_query", map[string]any{"profile": profile, "sql": "SELECT 1"}, &out)
 	}
 }
