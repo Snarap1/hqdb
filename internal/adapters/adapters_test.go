@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -186,5 +187,44 @@ func TestMongoURI(t *testing.T) {
 func TestErrNotSQLMongo(t *testing.T) {
 	if got := ErrNotSQL("mongodb", "run_query").Error(); got != "run_query is not available for mongodb; use run_mongo" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestParseODBCMissingServerDoesNotLeakPassword(t *testing.T) {
+	_, err := parseODBC("Driver={X};Database=db;Uid=sa;Pwd=secret;")
+	if err == nil {
+		t.Fatal("expected an error when the ODBC string has no Server")
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("error leaks the password: %v", err)
+	}
+	want := "ODBC conn_str has no Server: Driver={X};Database=db;Uid=sa;Pwd=***;"
+	if err.Error() != want {
+		t.Errorf("got %q, want %q", err, want)
+	}
+}
+
+func TestOpenResolvesSecretReferences(t *testing.T) {
+	// A broken reference fails Open before any dial, so the wiring of
+	// secrets.Resolve into the public entries is observable without a
+	// driver or network.
+	_, err := Open(map[string]any{"adapter": "postgres", "host": "127.0.0.1",
+		"password": "${env:HQDB_ADAPTERS_TEST_MISSING}"})
+	want := `secret reference ${env:HQDB_ADAPTERS_TEST_MISSING}: environment variable "HQDB_ADAPTERS_TEST_MISSING" is not set`
+	if err == nil || err.Error() != want {
+		t.Errorf("Open = %v, want %q", err, want)
+	}
+}
+
+func TestOpenResolvesCmdReference(t *testing.T) {
+	// A failing command surfaces as the reference error before any driver
+	// work, proving the command ran inside Open. exit works under both sh
+	// and cmd.
+	p := map[string]any{"adapter": "postgres", "host": "127.0.0.1",
+		"password": "${cmd:exit 7}"}
+	_, err := Open(p)
+	want := "secret reference ${cmd:exit 7}: command failed: exit status 7"
+	if err == nil || err.Error() != want {
+		t.Errorf("Open = %v, want %q", err, want)
 	}
 }

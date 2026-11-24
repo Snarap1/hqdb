@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,6 +80,19 @@ func fileExists(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
+// FilePaths returns the discovered config file paths in the order Load
+// merges them, highest priority last. hqdb setup edits the file that
+// contributes a Profile, which is the last one defining its table.
+func FilePaths() ([]string, error) {
+	return findConfigFiles()
+}
+
+// FileDoc parses one config file the way Load does: a pyproject.toml
+// contributes only its [tool.hqdb] section.
+func FileDoc(path string) (map[string]any, error) {
+	return readConfigFile(path)
+}
+
 // readConfigFile reads one candidate file. A pyproject.toml only contributes
 // its [tool.hqdb] section.
 func readConfigFile(path string) (map[string]any, error) {
@@ -86,9 +100,20 @@ func readConfigFile(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("attempted to load the config file at %s, but encountered an error: %v", path, err)
 	}
+	doc, err := ParseDoc(path, data)
+	if err != nil {
+		return nil, fmt.Errorf("attempted to load the config file at %s, but encountered an error: %v", path, err)
+	}
+	return doc, nil
+}
+
+// ParseDoc parses one config file's bytes the way Load does: a
+// pyproject.toml contributes only its [tool.hqdb] section. hqdb setup
+// uses it to verify a patch against the same rules.
+func ParseDoc(path string, data []byte) (map[string]any, error) {
 	var doc map[string]any
 	if err := toml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("attempted to load the config file at %s, but encountered an error: %v", path, err)
+		return nil, err
 	}
 	if filepath.Base(path) == "pyproject.toml" {
 		tool, _ := doc["tool"].(map[string]any)
@@ -327,8 +352,8 @@ func DBOpt(p map[string]any) (string, error) {
 	return name, nil
 }
 
-// urlSchemes are the conn_str forms parsed as URLs.
-var urlSchemes = []string{"postgres://", "mysql://", "sqlserver://", "http://", "https://", "clickhouse://"}
+// URLSchemes are the conn_str forms parsed as URLs.
+var URLSchemes = []string{"postgres://", "mysql://", "sqlserver://", "http://", "https://", "clickhouse://"}
 
 // FillFromURL returns a copy of p with connection keys filled in from a
 // URL-form conn_str. Explicit keys in the profile take precedence over URL
@@ -339,7 +364,7 @@ func FillFromURL(p map[string]any, adapter string) (map[string]any, error) {
 		return p, err
 	}
 	isURL := false
-	for _, s := range urlSchemes {
+	for _, s := range URLSchemes {
 		if strings.HasPrefix(cs, s) {
 			isURL = true
 			break
@@ -350,7 +375,9 @@ func FillFromURL(p map[string]any, adapter string) (map[string]any, error) {
 	}
 	u, err := url.Parse(cs)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse conn_str %q: %v", cs, err)
+		// The parse error embeds the URL verbatim, so it cannot be passed
+		// through: name the conn_str redacted instead (RedactConnStr).
+		return nil, fmt.Errorf("could not parse conn_str %q as a URL", RedactConnStr(cs))
 	}
 	q := make(map[string]any, len(p))
 	for k, v := range p {
@@ -383,6 +410,24 @@ func FillFromURL(p map[string]any, adapter string) (map[string]any, error) {
 		}
 	}
 	return q, nil
+}
+
+// odbcPassRe matches an ODBC password key with its value, for redaction.
+var odbcPassRe = regexp.MustCompile(`(?i)\b(pwd|password)\s*=\s*[^;}]*\}?`)
+
+// RedactConnStr returns cs with everything that can carry a password
+// replaced with "***": URL credentials (the user:password between "://"
+// and the next "@") and ODBC password values (Pwd= or Password=, through
+// the next ";" or "}"). Error messages name a conn_str only through this,
+// because a parse failure must not echo the password.
+func RedactConnStr(cs string) string {
+	if i := strings.Index(cs, "://"); i >= 0 {
+		if rest := cs[i+3:]; strings.Contains(rest, "@") {
+			at := strings.Index(rest, "@")
+			cs = cs[:i+3] + "***" + rest[at:]
+		}
+	}
+	return odbcPassRe.ReplaceAllString(cs, "${1}=***")
 }
 
 // SortedProfileNames returns profile names in stable order.

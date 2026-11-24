@@ -104,3 +104,54 @@ func TestRunUnknownProfile(t *testing.T) {
 		t.Errorf("got:\n%s", out.String())
 	}
 }
+
+func TestRunChecksSecretReferencesWithoutExecuting(t *testing.T) {
+	// --no-probe reports a missing env var and an empty command, and never
+	// runs a ${cmd:...} reference.
+	cases := []struct {
+		name    string
+		profile map[string]any
+		want    string
+	}{
+		{"missing env var", map[string]any{"adapter": "postgres",
+			"password": "${env:HQDB_CHECK_TEST_MISSING}"},
+			`secret reference ${env:HQDB_CHECK_TEST_MISSING}: environment variable "HQDB_CHECK_TEST_MISSING" is not set`},
+		{"empty command", map[string]any{"adapter": "redis",
+			"password": "${cmd:}"},
+			`secret reference ${cmd:}: command is empty`},
+		{"set env var", map[string]any{"adapter": "postgres",
+			"password": "${env:HQDB_CHECK_TEST_SET}"}, ""},
+	}
+	t.Setenv("HQDB_CHECK_TEST_SET", "v")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := &config.Config{Profiles: map[string]map[string]any{"p": c.profile}}
+			var out bytes.Buffer
+			ok := Run(context.Background(), cfg, Options{}, &out)
+			if c.want == "" {
+				if !ok || !strings.Contains(out.String(), "ok") {
+					t.Errorf("a valid reference must pass:\n%s", out.String())
+				}
+				return
+			}
+			if ok || !strings.Contains(out.String(), c.want) {
+				t.Errorf("got pass=%v, output:\n%s\nwant FAIL with %q", ok, out.String(), c.want)
+			}
+		})
+	}
+}
+
+func TestRunHintsAtSetupForLiteralCredentials(t *testing.T) {
+	cfg := &config.Config{Profiles: map[string]map[string]any{
+		"p": {"adapter": "postgres", "password": "plain"},
+	}}
+	var out bytes.Buffer
+	if ok := Run(context.Background(), cfg, Options{}, &out); !ok {
+		t.Errorf("a literal password is valid, want a pass:\n%s", out.String())
+	}
+	want := "p  postgres  read-only  ok  literal credentials; run hqdb setup"
+	got := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")[0]
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}

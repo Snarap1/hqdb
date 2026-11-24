@@ -9,8 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
-
-	"github.com/Snarap1/hqdb/internal/config"
 )
 
 // OpenReusable opens a connection that the MCP server keeps across tool
@@ -26,22 +24,22 @@ import (
 // tells the caller whether it may reuse the connection after a statement
 // it did not write itself.
 func OpenReusable(ctx context.Context, p map[string]any, database string) (DB, error) {
-	adapter, err := config.Validate(p)
+	q, adapter, err := resolved(ctx, p)
 	if err != nil {
 		return nil, err
 	}
 	switch adapter {
 	case "postgres":
 		if database != "" {
-			if err := checkPostgresDatabase(ctx, p, database); err != nil {
+			if err := checkPostgresDatabase(ctx, q, database); err != nil {
 				return nil, err
 			}
 		}
-		return connectReusablePostgres(p, database)
+		return connectReusablePostgres(q, database)
 	case "redis":
-		return openRedisWith(p, true)
+		return openRedisWith(q, true)
 	}
-	return OpenDatabase(ctx, p, database)
+	return OpenDatabase(ctx, q, database)
 }
 
 // ResetSession resets, right away, the session state of every idle

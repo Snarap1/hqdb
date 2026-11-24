@@ -74,14 +74,14 @@ func errNoDiscovery(adapter string) error {
 // Databases returns the Databases a postgres Profile exposes, sorted: every
 // one the login can open (see SQL.Databases). Other adapters are an error.
 func Databases(ctx context.Context, p map[string]any) ([]string, error) {
-	adapter, err := config.Validate(p)
+	q, adapter, err := resolved(ctx, p)
 	if err != nil {
 		return nil, err
 	}
 	if !BindsDatabase(adapter) {
 		return nil, errNoDiscovery(adapter)
 	}
-	conn, err := connectPostgres(p, "")
+	conn, err := connectPostgres(q, "")
 	if err != nil {
 		return nil, err
 	}
@@ -194,14 +194,14 @@ func CheckDatabase(requested string, available []string) error {
 // Profile's dbname or one that discovery lists, otherwise the error names
 // the available ones.
 func OpenDatabase(ctx context.Context, p map[string]any, database string) (DB, error) {
-	adapter, err := config.Validate(p)
+	q, adapter, err := resolved(ctx, p)
 	if err != nil {
 		return nil, err
 	}
 	if database == "" || !BindsDatabase(adapter) {
-		return Open(p)
+		return openAdapter(adapter, q)
 	}
-	c, err := openPostgresIn(ctx, p, database)
+	c, err := openPostgresIn(ctx, q, database)
 	if err != nil {
 		return nil, err
 	}

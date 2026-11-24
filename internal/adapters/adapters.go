@@ -5,6 +5,7 @@
 package adapters
 
 import (
+	"context"
 	"crypto/tls"
 	"database/sql"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/Snarap1/hqdb/internal/config"
+	"github.com/Snarap1/hqdb/internal/secrets"
 )
 
 // DB is an open connection to one profile. The terminal UI and the MCP
@@ -71,25 +73,51 @@ func (c *Redis) Redis() *redis.Client { return c.client }
 // Sep is the key separator configured for the redis profile.
 func (c *Redis) Sep() string { return c.sep }
 
-// Open validates the profile and opens a fresh connection for its adapter.
+// Open validates the profile and opens a fresh connection for its
+// adapter.
 func Open(p map[string]any) (DB, error) {
-	adapter, err := config.Validate(p)
+	q, adapter, err := resolved(context.Background(), p)
 	if err != nil {
 		return nil, err
 	}
+	return openAdapter(adapter, q)
+}
+
+// resolved validates p and returns a copy of it with every secret
+// reference expanded (internal/secrets), together with p's adapter.
+// Resolution happens here, at the public entries, and nowhere else: both
+// front ends and hqdb check reach a database only through them, while the
+// rest of the program (list_profiles, the pool's hash, ADR-0006) keeps
+// seeing the raw table from the config file. Validation runs after the
+// expansion, so a reference may fill any string option and the expanded
+// value is still checked.
+func resolved(ctx context.Context, p map[string]any) (map[string]any, string, error) {
+	q, err := secrets.Resolve(ctx, p)
+	if err != nil {
+		return nil, "", err
+	}
+	adapter, err := config.Validate(q)
+	if err != nil {
+		return nil, "", err
+	}
+	return q, adapter, nil
+}
+
+// openAdapter opens the resolved, validated profile q for adapter.
+func openAdapter(adapter string, q map[string]any) (DB, error) {
 	switch adapter {
 	case "postgres":
-		return openPostgres(p)
+		return openPostgres(q)
 	case "mysql":
-		return openMySQL(p)
+		return openMySQL(q)
 	case "mssql", "odbc":
-		return openMSSQL(p, adapter)
+		return openMSSQL(q, adapter)
 	case "clickhouse":
-		return openClickHouse(p)
+		return openClickHouse(q)
 	case "redis":
-		return openRedis(p)
+		return openRedis(q)
 	case "mongodb":
-		return openMongo(p)
+		return openMongo(q)
 	default:
 		return nil, fmt.Errorf("adapter %q is not supported; supported: %s", adapter, config.SupportedAdapters)
 	}
@@ -296,7 +324,7 @@ func parseODBC(cs string) (odbcConn, error) {
 		}
 	}
 	if out.host == "" {
-		return out, fmt.Errorf("ODBC conn_str has no Server: %s", cs)
+		return out, fmt.Errorf("ODBC conn_str has no Server: %s", config.RedactConnStr(cs))
 	}
 	if out.port == 0 {
 		out.port = 1433

@@ -34,6 +34,7 @@ Usage:
                             serve the Profiles to an AI agent over MCP (stdio)
   hqdb check [flags] [profile ...]
                             validate the config and probe each Profile
+  hqdb setup                move literal credentials into a secret store
   hqdb version              print the version
 
 Config: hqdb.toml, .hqdb.toml, $XDG_CONFIG_HOME/hqdb/config.toml,
@@ -53,6 +54,8 @@ func run(args []string) int {
 		return runMCP(args[1:])
 	case "check":
 		return runCheck(args[1:])
+	case "setup":
+		return runSetup()
 	case "version", "--version", "-v":
 		fmt.Println("hqdb " + currentVersion())
 		return 0
@@ -118,6 +121,23 @@ func runCheck(args []string) int {
 		return 1
 	}
 	if !check.Run(context.Background(), cfg, check.Options{Profiles: fs.Args(), Probe: !*noProbe}, os.Stdout) {
+		return 1
+	}
+	return 0
+}
+
+func runSetup() int {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hqdb: %v\n", err)
+		return 1
+	}
+	if len(cfg.Profiles) == 0 {
+		fmt.Fprintln(os.Stderr, "hqdb: no profiles found; see hqdb help for where the config is read from")
+		return 1
+	}
+	if err := ui.RunSetup(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "hqdb: %v\n", err)
 		return 1
 	}
 	return 0

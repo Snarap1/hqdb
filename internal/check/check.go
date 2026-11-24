@@ -18,6 +18,8 @@ import (
 	"github.com/Snarap1/hqdb/internal/mask"
 	"github.com/Snarap1/hqdb/internal/query"
 	"github.com/Snarap1/hqdb/internal/rediscmd"
+	"github.com/Snarap1/hqdb/internal/secrets"
+	"github.com/Snarap1/hqdb/internal/setup"
 )
 
 // probeTimeout bounds one Profile's connection and probe.
@@ -50,8 +52,15 @@ func Run(ctx context.Context, cfg *config.Config, opts Options, w io.Writer) boo
 		if err != nil {
 			pass = false
 			status, detail = "FAIL", err.Error()
-		} else if name == cfg.DefaultProfile {
-			detail = "(default)"
+		} else {
+			var hints []string
+			if setup.HasLiteral(cfg.Profiles[name]) {
+				hints = append(hints, "literal credentials; run hqdb setup")
+			}
+			if name == cfg.DefaultProfile {
+				hints = append(hints, "(default)")
+			}
+			detail = strings.Join(hints, "; ")
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, adapter, access, status, detail)
 	}
@@ -80,6 +89,12 @@ func checkProfile(ctx context.Context, cfg *config.Config, name string, probe bo
 	}
 	adapter = config.AdapterName(p)
 	if _, err := config.Validate(p); err != nil {
+		return adapter, "-", err
+	}
+	// Secret references are checked without running any command, so
+	// --no-probe still catches a missing variable; a ${cmd:...} reference
+	// is executed only by the real probe below.
+	if err := secrets.Check(p); err != nil {
 		return adapter, "-", err
 	}
 	a, _ := config.ProfileAccess(p)
